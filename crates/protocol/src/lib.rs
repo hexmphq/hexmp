@@ -73,15 +73,177 @@ pub enum ClientMessage {
     Hello { version: u16, name: String },
     /// Posição sugerida pelo cliente. O servidor valida.
     Input { seq: u32, position: Vec3 },
+    /// Chamada a um RPC definido por script (`rpc.define`). Resposta em `RpcResult` com o mesmo `id`.
+    Rpc {
+        id: u32,
+        name: String,
+        args: Payload,
+    },
 }
 
 impl ClientMessage {
     pub fn channel(&self) -> Channel {
         match self {
-            ClientMessage::Hello { .. } => Channel::Reliable,
+            ClientMessage::Hello { .. } | ClientMessage::Rpc { .. } => Channel::Reliable,
             ClientMessage::Input { .. } => Channel::Snapshot,
         }
     }
+}
+
+/// Valor que atravessa a fronteira script ↔ rede ↔ outro recurso.
+/// Sem funções nem userdata: só dados.
+#[derive(Debug, Clone, PartialEq)]
+pub enum ScriptValue {
+    Nil,
+    Bool(bool),
+    Number(f64),
+    String(String),
+    Array(Vec<ScriptValue>),
+    Map(Vec<(String, ScriptValue)>),
+}
+
+impl ScriptValue {
+    /// Profundidade de aninhamento.
+    pub fn depth(&self) -> usize {
+        match self {
+            ScriptValue::Array(v) => 1 + v.iter().map(Self::depth).max().unwrap_or(0),
+            ScriptValue::Map(v) => 1 + v.iter().map(|(_, x)| x.depth()).max().unwrap_or(0),
+            _ => 0,
+        }
+    }
+}
+
+/// Limites de um [`Payload`] vindo da rede.
+pub const MAX_PAYLOAD_NODES: usize = 4096;
+pub const MAX_PAYLOAD_DEPTH: usize = 16;
+pub const MAX_PAYLOAD_STRING: usize = 16 * 1024;
+
+/// Nó de um payload achatado (pré-ordem). Arrays e maps guardam só o tamanho;
+/// num map, cada entrada é a chave (`Str`) seguida do valor.
+#[derive(Debug, Clone, PartialEq, Encode, Decode)]
+enum Node {
+    Nil,
+    Bool(bool),
+    Num(f64),
+    Str(String),
+    Array(u32),
+    Map(u32),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PayloadError {
+    TooManyNodes,
+    TooDeep,
+    StringTooLong,
+    Malformed,
+}
+
+impl std::fmt::Display for PayloadError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            PayloadError::TooManyNodes => "payload com itens demais",
+            PayloadError::TooDeep => "payload aninhado demais",
+            PayloadError::StringTooLong => "texto grande demais no payload",
+            PayloadError::Malformed => "payload malformado",
+        })
+    }
+}
+
+impl std::error::Error for PayloadError {}
+
+/// Lista de [`ScriptValue`] serializável (o bitcode não aceita tipos recursivos).
+#[derive(Debug, Clone, PartialEq, Default, Encode, Decode)]
+pub struct Payload(Vec<Node>);
+
+impl Payload {
+    pub fn from_values(values: &[ScriptValue]) -> Self {
+        let mut nodes = Vec::new();
+        for v in values {
+            flatten(v, &mut nodes);
+        }
+        Payload(nodes)
+    }
+
+    pub fn to_values(&self) -> Result<Vec<ScriptValue>, PayloadError> {
+        if self.0.len() > MAX_PAYLOAD_NODES {
+            return Err(PayloadError::TooManyNodes);
+        }
+        let mut it = self.0.iter();
+        let mut out = Vec::new();
+        while it.len() > 0 {
+            out.push(unflatten(&mut it, 0)?);
+        }
+        Ok(out)
+    }
+}
+
+fn flatten(v: &ScriptValue, out: &mut Vec<Node>) {
+    match v {
+        ScriptValue::Nil => out.push(Node::Nil),
+        ScriptValue::Bool(b) => out.push(Node::Bool(*b)),
+        ScriptValue::Number(n) => out.push(Node::Num(*n)),
+        ScriptValue::String(s) => out.push(Node::Str(s.clone())),
+        ScriptValue::Array(items) => {
+            out.push(Node::Array(items.len() as u32));
+            for i in items {
+                flatten(i, out);
+            }
+        }
+        ScriptValue::Map(entries) => {
+            out.push(Node::Map(entries.len() as u32));
+            for (k, val) in entries {
+                out.push(Node::Str(k.clone()));
+                flatten(val, out);
+            }
+        }
+    }
+}
+
+fn unflatten(
+    it: &mut std::slice::Iter<'_, Node>,
+    depth: usize,
+) -> Result<ScriptValue, PayloadError> {
+    if depth > MAX_PAYLOAD_DEPTH {
+        return Err(PayloadError::TooDeep);
+    }
+    let check = |s: &String| {
+        if s.len() > MAX_PAYLOAD_STRING {
+            Err(PayloadError::StringTooLong)
+        } else {
+            Ok(s.clone())
+        }
+    };
+    Ok(match it.next().ok_or(PayloadError::Malformed)? {
+        Node::Nil => ScriptValue::Nil,
+        Node::Bool(b) => ScriptValue::Bool(*b),
+        Node::Num(n) => ScriptValue::Number(*n),
+        Node::Str(s) => ScriptValue::String(check(s)?),
+        Node::Array(n) => {
+            let n = *n as usize;
+            if n > it.len() {
+                return Err(PayloadError::Malformed);
+            }
+            let mut items = Vec::with_capacity(n);
+            for _ in 0..n {
+                items.push(unflatten(it, depth + 1)?);
+            }
+            ScriptValue::Array(items)
+        }
+        Node::Map(n) => {
+            let n = *n as usize;
+            if n * 2 > it.len() {
+                return Err(PayloadError::Malformed);
+            }
+            let mut entries = Vec::with_capacity(n);
+            for _ in 0..n {
+                let Some(Node::Str(k)) = it.next() else {
+                    return Err(PayloadError::Malformed);
+                };
+                entries.push((check(k)?, unflatten(it, depth + 1)?));
+            }
+            ScriptValue::Map(entries)
+        }
+    })
 }
 
 #[derive(Debug, Clone, PartialEq, Encode, Decode)]
@@ -115,6 +277,16 @@ pub enum ServerMessage {
     /// O servidor recusou um input e devolve a posição oficial.
     Correction {
         position: Vec3,
+    },
+    /// Resposta a `ClientMessage::Rpc`. `Err` traz mensagem legível.
+    RpcResult {
+        id: u32,
+        result: Result<Payload, String>,
+    },
+    /// Evento enviado por script (`net.emit` / `net.broadcast`).
+    Event {
+        name: String,
+        args: Payload,
     },
 }
 
@@ -168,6 +340,49 @@ mod tests {
         };
         let back: ServerMessage = decode(&encode(&m)).unwrap();
         assert_eq!(back, m);
+    }
+
+    #[test]
+    fn payload_roundtrip() {
+        let v = ScriptValue::Map(vec![
+            ("ok".into(), ScriptValue::Bool(true)),
+            (
+                "itens".into(),
+                ScriptValue::Array(vec![ScriptValue::Number(1.5), ScriptValue::Nil]),
+            ),
+        ]);
+        assert_eq!(v.depth(), 2);
+        let values = vec![v, ScriptValue::String("x".into())];
+        let m = ServerMessage::RpcResult {
+            id: 3,
+            result: Ok(Payload::from_values(&values)),
+        };
+        let ServerMessage::RpcResult { result: Ok(p), .. } = decode(&encode(&m)).unwrap() else {
+            panic!()
+        };
+        assert_eq!(p.to_values().unwrap(), values);
+    }
+
+    #[test]
+    fn payload_limits() {
+        let mut deep = ScriptValue::Nil;
+        for _ in 0..40 {
+            deep = ScriptValue::Array(vec![deep]);
+        }
+        let p = Payload::from_values(&[deep]);
+        assert_eq!(p.to_values(), Err(PayloadError::TooDeep));
+
+        let big = ScriptValue::String("x".repeat(MAX_PAYLOAD_STRING + 1));
+        assert_eq!(
+            Payload::from_values(&[big]).to_values(),
+            Err(PayloadError::StringTooLong)
+        );
+
+        // Array que promete mais itens do que existem.
+        assert_eq!(
+            Payload(vec![Node::Array(1000)]).to_values(),
+            Err(PayloadError::Malformed)
+        );
     }
 
     #[test]

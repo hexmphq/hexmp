@@ -1,7 +1,10 @@
 //! Servidor real + bots reais via UDP em localhost.
 
 use hexmp_headless_bot::{Behavior, Bot};
+use hexmp_protocol::ScriptValue;
+use hexmp_scripting::{EngineConfig, ScriptEngine};
 use hexmp_server::{GameServer, ServerConfig, transport::RenetTransport};
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, mpsc};
 use std::time::{Duration, Instant};
@@ -14,6 +17,16 @@ struct RunningServer {
 
 impl RunningServer {
     fn start() -> Self {
+        Self::start_with(None)
+    }
+
+    /// Servidor com os recursos de exemplo da pasta `resources/` do repositório.
+    fn with_example_resources() -> Self {
+        let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../resources");
+        Self::start_with(Some(root))
+    }
+
+    fn start_with(resources: Option<PathBuf>) -> Self {
         let stop = Arc::new(AtomicBool::new(false));
         let (tx, rx) = mpsc::channel();
         let stop_flag = stop.clone();
@@ -21,6 +34,13 @@ impl RunningServer {
             let transport = RenetTransport::bind("127.0.0.1:0".parse().unwrap(), 16).unwrap();
             tx.send(transport.local_addr()).unwrap();
             let mut server = GameServer::new(transport, ServerConfig::default());
+            if let Some(root) = resources {
+                let mut engine = ScriptEngine::new(root, EngineConfig::default());
+                for (name, r) in engine.start_all() {
+                    r.unwrap_or_else(|e| panic!("recurso {name}: {e}"));
+                }
+                server = server.with_scripts(engine);
+            }
             server.run(|_| stop_flag.load(Ordering::Relaxed));
         });
         let addr = rx.recv_timeout(Duration::from_secs(5)).unwrap();
@@ -119,4 +139,70 @@ fn invalid_name_is_rejected() {
 
 fn drop_bot(mut bot: Bot) {
     bot.disconnect();
+}
+
+fn s(v: &str) -> ScriptValue {
+    ScriptValue::String(v.into())
+}
+
+fn n(v: f64) -> ScriptValue {
+    ScriptValue::Number(v)
+}
+
+/// Espera a resposta do RPC `id`.
+fn wait_rpc(bots: &mut [Bot], id: u32) -> hexmp_headless_bot::RpcResult {
+    assert!(
+        pump(bots, Duration::from_secs(5), |b| b[0]
+            .rpc_results
+            .contains_key(&id)),
+        "sem resposta para rpc {id}"
+    );
+    bots[0].rpc_results[&id].clone()
+}
+
+#[test]
+fn shop_and_bank_resources_over_the_network() {
+    let server = RunningServer::with_example_resources();
+    let mut bots = vec![Bot::connect(server.addr, "cliente", 4000, Behavior::Idle).unwrap()];
+    assert!(pump(&mut bots, Duration::from_secs(10), |b| b[0]
+        .player_id
+        .is_some()));
+
+    let id = bots[0].call("bank.saldo", &[]);
+    assert_eq!(wait_rpc(&mut bots, id), Ok(vec![n(1000.0)]));
+
+    let id = bots[0].call("shop.buy", &[s("agua")]);
+    assert_eq!(wait_rpc(&mut bots, id), Ok(vec![n(995.0)]));
+    assert!(pump(&mut bots, Duration::from_secs(5), |b| !b[0]
+        .events
+        .is_empty()));
+    assert_eq!(
+        bots[0].events[0],
+        ("shop:comprou".to_string(), vec![s("agua"), n(995.0)])
+    );
+
+    let id = bots[0].call("shop.buy", &[s("celular")]);
+    assert_eq!(wait_rpc(&mut bots, id), Err("saldo insuficiente".into()));
+
+    let id = bots[0].call("shop.buy", &[s("foguete")]);
+    assert_eq!(wait_rpc(&mut bots, id), Err("item inválido".into()));
+
+    // O cliente não consegue mandar o preço: argumento extra é ignorado pela loja.
+    let id = bots[0].call("shop.buy", &[s("lanche"), n(0.0)]);
+    assert_eq!(wait_rpc(&mut bots, id), Ok(vec![n(980.0)]));
+
+    // Limite de 5 chamadas por 2 s: a 5ª passa, a 6ª é barrada.
+    let id = bots[0].call("shop.buy", &[s("agua")]);
+    assert_eq!(wait_rpc(&mut bots, id), Ok(vec![n(975.0)]));
+    let id = bots[0].call("shop.buy", &[s("agua")]);
+    assert_eq!(
+        wait_rpc(&mut bots, id),
+        Err("limite de chamadas excedido, tente mais tarde".into())
+    );
+
+    let id = bots[0].call("nao.existe", &[]);
+    assert_eq!(
+        wait_rpc(&mut bots, id),
+        Err("rpc `nao.existe` não existe".into())
+    );
 }

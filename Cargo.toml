@@ -14,7 +14,9 @@ hexmp-protocol = { path = "crates/protocol" }
 hexmp-sim = { path = "crates/sim" }
 hexmp-server = { path = "crates/server" }
 hexmp-headless-bot = { path = "crates/headless-bot" }
+hexmp-scripting = { path = "crates/scripting" }
 bitcode = "0.6.9"
+mlua = { version = "0.12.2", features = ["luau"] }
 renet2 = "1.0.1"
 renet2_netcode = "1.0.1"
 tracing = "0.1"

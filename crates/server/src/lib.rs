@@ -3,8 +3,9 @@
 pub mod transport;
 
 use hexmp_protocol::{
-    ClientMessage, MAX_NAME_LEN, PROTOCOL_VERSION, PlayerId, ServerMessage, decode, encode,
+    ClientMessage, MAX_NAME_LEN, PROTOCOL_VERSION, Payload, PlayerId, ServerMessage, decode, encode,
 };
+use hexmp_scripting::{Command, PlayerInfo, ScriptEngine, Target};
 use hexmp_sim::World;
 use std::collections::HashMap;
 use std::time::{Duration, Instant};
@@ -19,6 +20,8 @@ pub struct ServerConfig {
     pub hello_timeout: Duration,
     /// Mensagens malformadas toleradas antes de expulsar.
     pub max_bad_messages: u32,
+    /// Verifica a cada N segundos se arquivos de recursos mudaram e os reinicia.
+    pub hot_reload: Option<Duration>,
 }
 
 impl Default for ServerConfig {
@@ -28,6 +31,7 @@ impl Default for ServerConfig {
             interest_radius: 500.0,
             hello_timeout: Duration::from_secs(5),
             max_bad_messages: 10,
+            hot_reload: None,
         }
     }
 }
@@ -48,6 +52,8 @@ pub struct GameServer<T: Transport> {
     /// Expulsos neste tick; desconectados depois do flush para a mensagem de motivo sair.
     kick_queue: Vec<ClientId>,
     events: Vec<NetEvent>,
+    scripts: Option<ScriptEngine>,
+    since_reload_check: Duration,
 }
 
 impl<T: Transport> GameServer<T> {
@@ -59,7 +65,23 @@ impl<T: Transport> GameServer<T> {
             sessions: HashMap::new(),
             kick_queue: Vec::new(),
             events: Vec::new(),
+            scripts: None,
+            since_reload_check: Duration::ZERO,
         }
+    }
+
+    /// Liga o motor de scripts. Recursos devem ser iniciados antes ou depois via [`Self::scripts_mut`].
+    pub fn with_scripts(mut self, engine: ScriptEngine) -> Self {
+        self.scripts = Some(engine);
+        self
+    }
+
+    pub fn scripts(&self) -> Option<&ScriptEngine> {
+        self.scripts.as_ref()
+    }
+
+    pub fn scripts_mut(&mut self) -> Option<&mut ScriptEngine> {
+        self.scripts.as_mut()
     }
 
     pub fn tick_duration(&self) -> Duration {
@@ -84,6 +106,7 @@ impl<T: Transport> GameServer<T> {
         self.events = events;
 
         self.kick_silent_clients();
+        self.run_scripts(dt);
         self.world.step();
         self.replicate();
         self.transport.flush();
@@ -131,6 +154,9 @@ impl<T: Transport> GameServer<T> {
                     && let Some(id) = session.player
                 {
                     self.world.despawn_player(id);
+                    if let Some(engine) = &mut self.scripts {
+                        engine.player_left(id, &reason);
+                    }
                     self.broadcast(&ServerMessage::PlayerLeft { id });
                 }
             }
@@ -178,7 +204,79 @@ impl<T: Transport> GameServer<T> {
                     }
                 }
             }
+            ClientMessage::Rpc { id, name, args } => {
+                let Some(player) = session.player else {
+                    return;
+                };
+                let result = match args.to_values() {
+                    Err(e) => {
+                        self.bad_message(client, "payload de rpc inválido");
+                        Err(e.to_string())
+                    }
+                    Ok(args) => match &mut self.scripts {
+                        Some(engine) => engine
+                            .call_rpc(player, &name, &args)
+                            .map(|v| Payload::from_values(&v)),
+                        None => Err(format!("rpc `{name}` não existe")),
+                    },
+                };
+                self.send(client, &ServerMessage::RpcResult { id, result });
+            }
         }
+    }
+
+    fn run_scripts(&mut self, dt: Duration) {
+        let Some(engine) = &mut self.scripts else {
+            return;
+        };
+        for p in self.world.players() {
+            engine.update_position(p.id, p.position);
+        }
+        engine.tick(dt);
+
+        if let Some(every) = self.config.hot_reload {
+            self.since_reload_check += dt;
+            if self.since_reload_check >= every {
+                self.since_reload_check = Duration::ZERO;
+                for (name, result) in engine.reload_changed() {
+                    match result {
+                        Ok(()) => tracing::info!(resource = %name, "recarregado"),
+                        Err(e) => tracing::error!(resource = %name, "falha ao recarregar: {e}"),
+                    }
+                }
+            }
+        }
+
+        for cmd in engine.drain_commands() {
+            match cmd {
+                Command::Emit { target, name, args } => {
+                    let msg = ServerMessage::Event {
+                        name,
+                        args: Payload::from_values(&args),
+                    };
+                    match target {
+                        Target::All => self.broadcast(&msg),
+                        Target::Player(id) => {
+                            if let Some(client) = self.client_of(id) {
+                                self.send(client, &msg);
+                            }
+                        }
+                    }
+                }
+                Command::Kick { player, reason } => {
+                    if let Some(client) = self.client_of(player) {
+                        self.reject(client, reason);
+                    }
+                }
+            }
+        }
+    }
+
+    fn client_of(&self, player: PlayerId) -> Option<ClientId> {
+        self.sessions
+            .iter()
+            .find(|(_, s)| s.player == Some(player))
+            .map(|(c, _)| *c)
     }
 
     fn join(&mut self, client: ClientId, name: String) {
@@ -188,6 +286,13 @@ impl<T: Transport> GameServer<T> {
             s.player = Some(id);
         }
         tracing::info!(client, id, %name, "entrou no mundo");
+        if let Some(engine) = &mut self.scripts {
+            engine.player_joined(PlayerInfo {
+                id,
+                name: name.clone(),
+                position: spawn,
+            });
+        }
 
         self.send(
             client,

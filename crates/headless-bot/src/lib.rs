@@ -2,12 +2,12 @@
 //! Serve para testes automáticos e teste de carga sem o jogo.
 
 use hexmp_protocol::{
-    Channel, ClientMessage, NETCODE_PROTOCOL_ID, PROTOCOL_VERSION, PlayerId, ServerMessage, Vec3,
-    decode, encode,
+    Channel, ClientMessage, NETCODE_PROTOCOL_ID, PROTOCOL_VERSION, Payload, PlayerId, ScriptValue,
+    ServerMessage, Vec3, decode, encode,
 };
 use renet2::{ConnectionConfig, DefaultChannel, RenetClient};
 use renet2_netcode::{ClientAuthentication, NativeSocket, NetcodeClientTransport};
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::net::{SocketAddr, UdpSocket};
 use std::time::{Duration, SystemTime};
 
@@ -17,7 +17,11 @@ pub enum Behavior {
     Walk { radius: f32, speed: f32 },
     /// Tenta se teletransportar (para testar a validação do servidor).
     Teleport,
+    /// Fica parado (não manda input).
+    Idle,
 }
+
+pub type RpcResult = Result<Vec<ScriptValue>, String>;
 
 #[derive(Debug, Default, Clone)]
 pub struct BotStats {
@@ -39,7 +43,12 @@ pub struct Bot {
     pub known_players: HashSet<PlayerId>,
     pub position: Vec3,
     pub stats: BotStats,
+    /// Respostas de RPC por id.
+    pub rpc_results: HashMap<u32, RpcResult>,
+    /// Eventos recebidos (`net.emit`/`net.broadcast`), em ordem.
+    pub events: Vec<(String, Vec<ScriptValue>)>,
     seq: u32,
+    next_rpc: u32,
     elapsed: f32,
 }
 
@@ -83,7 +92,10 @@ impl Bot {
             known_players: HashSet::new(),
             position: Vec3::ZERO,
             stats: BotStats::default(),
+            rpc_results: HashMap::new(),
+            events: Vec::new(),
             seq: 0,
+            next_rpc: 1,
             elapsed: 0.0,
         })
     }
@@ -120,12 +132,25 @@ impl Bot {
         let _ = self.transport.send_packets(&mut self.client);
     }
 
+    /// Chama um RPC do servidor. A resposta aparece em `rpc_results[id]`.
+    pub fn call(&mut self, name: &str, args: &[ScriptValue]) -> u32 {
+        let id = self.next_rpc;
+        self.next_rpc += 1;
+        self.send(&ClientMessage::Rpc {
+            id,
+            name: name.into(),
+            args: Payload::from_values(args),
+        });
+        id
+    }
+
     pub fn disconnect(&mut self) {
         self.transport.disconnect();
     }
 
     fn move_step(&mut self) {
         self.position = match self.behavior {
+            Behavior::Idle => return,
             Behavior::Walk { radius, speed } => {
                 let angle = self.elapsed * speed / radius;
                 Vec3::new(radius * angle.cos() - radius, radius * angle.sin(), 0.0)
@@ -176,6 +201,15 @@ impl Bot {
             ServerMessage::Correction { position } => {
                 self.position = position;
                 self.stats.corrections += 1;
+            }
+            ServerMessage::RpcResult { id, result } => {
+                let result = result.and_then(|p| p.to_values().map_err(|e| e.to_string()));
+                self.rpc_results.insert(id, result);
+            }
+            ServerMessage::Event { name, args } => {
+                if let Ok(args) = args.to_values() {
+                    self.events.push((name, args));
+                }
             }
         }
     }

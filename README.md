@@ -20,16 +20,19 @@ packages/
   ui-kit        componentes de UI
   panel         painel web (Svelte)
 rp-kit/         framework de RP opcional (Luau)
+resources/      recursos de exemplo (bank, shop)
 docs/           documentação e decisões técnicas
 ```
 
 ## Rodar
 
 ```sh
-cargo run -p hexmp-server
-cargo run -p hexmp-headless-bot
+cargo run -p hexmp-server -- --resources resources --hot-reload 1
+cargo run -p hexmp-headless-bot -- --bots 10 --seconds 10
 cargo test --workspace
 ```
+
+Como escrever recursos: [packages/sdk](packages/sdk/README.md).
 
 ## Licença
 

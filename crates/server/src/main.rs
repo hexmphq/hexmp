@@ -1,9 +1,12 @@
 use hexmp_protocol::{DEFAULT_PORT, PROTOCOL_VERSION};
+use hexmp_scripting::{EngineConfig, ScriptEngine};
 use hexmp_server::{GameServer, ServerConfig, transport::RenetTransport};
 use std::net::SocketAddr;
+use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
-const USAGE: &str = "uso: hexmp-server [--bind 0.0.0.0:30120] [--max-clients 64] [--seconds N]";
+const USAGE: &str = "uso: hexmp-server [--bind 0.0.0.0:30120] [--max-clients 64] \
+[--resources ./resources] [--hot-reload SEGUNDOS] [--seconds N]";
 
 fn main() {
     tracing_subscriber::fmt()
@@ -15,6 +18,8 @@ fn main() {
     let mut bind: SocketAddr = ([0, 0, 0, 0], DEFAULT_PORT).into();
     let mut max_clients = 64;
     let mut seconds: Option<u64> = None;
+    let mut resources = PathBuf::from("resources");
+    let mut hot_reload: Option<u64> = None;
     let mut args = std::env::args().skip(1);
     while let Some(arg) = args.next() {
         let value = args.next();
@@ -24,6 +29,10 @@ fn main() {
             "--seconds" => value
                 .and_then(|v| v.parse().ok())
                 .map(|v| seconds = Some(v)),
+            "--resources" => value.map(|v| resources = v.into()),
+            "--hot-reload" => value
+                .and_then(|v| v.parse().ok())
+                .map(|v| hot_reload = Some(v)),
             _ => None,
         };
         if parsed.is_none() {
@@ -39,7 +48,10 @@ fn main() {
             std::process::exit(1);
         }
     };
-    let config = ServerConfig::default();
+    let config = ServerConfig {
+        hot_reload: hot_reload.map(Duration::from_secs),
+        ..ServerConfig::default()
+    };
     tracing::info!(
         addr = %transport.local_addr(),
         protocol = PROTOCOL_VERSION,
@@ -47,8 +59,24 @@ fn main() {
         "hexmp-server iniciado"
     );
 
+    let mut engine = ScriptEngine::new(&resources, EngineConfig::default());
+    if resources.is_dir() {
+        for (name, result) in engine.start_all() {
+            if let Err(e) = result {
+                tracing::error!(resource = %name, "{e}");
+            }
+        }
+        tracing::info!(
+            path = %resources.display(),
+            running = ?engine.running(),
+            "recursos carregados"
+        );
+    } else {
+        tracing::warn!(path = %resources.display(), "pasta de recursos não existe; sem scripts");
+    }
+
     let deadline = seconds.map(|s| Instant::now() + Duration::from_secs(s));
-    let mut server = GameServer::new(transport, config);
+    let mut server = GameServer::new(transport, config).with_scripts(engine);
     server.run(|_| deadline.is_some_and(|d| Instant::now() >= d));
     tracing::info!(ticks = server.world.tick, "hexmp-server encerrado");
 }

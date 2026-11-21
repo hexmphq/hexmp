@@ -14,3 +14,4 @@ renet2_netcode.workspace = true
 
 [dev-dependencies]
 hexmp-server.workspace = true
+hexmp-scripting.workspace = true
