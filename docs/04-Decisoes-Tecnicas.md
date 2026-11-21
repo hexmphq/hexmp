@@ -27,6 +27,7 @@ Regra geral: com uma pessoa só, **poucas linguagens, cada uma com papel claro**
 | Painel web | **Svelte SPA** (SvelteKit `adapter-static`) **embutido no binário do servidor**; API REST + WebSocket no `axum`; login pelo ID da plataforma | SvelteKit com Node, Next.js, Leptos/Dioxus, htmx |
 | Build/CI | Cargo + CMake, GitHub Actions, Docker para o servidor | — |
 | Plataforma servidor | Linux x64 (principal), Windows x64 (secundário) | — |
+| Nome | **HexM** (marca curta) / **HexMP** (nome completo); GitHub `hexmphq` | nomes com "Six", "VI", "GTA" ou "Vice" (risco de marca) |
 
 Linguagens no projeto: **Rust** (servidor e cliente), **C++** (só wrappers de RmlUi/CEF), **Luau** (scripts) e **TypeScript** (só UI e painel web). C# fica de fora para não espalhar esforço.
 
@@ -469,12 +470,40 @@ Acesso pelos scripts:
 
 ---
 
+## Nome e domínios
+
+- **HexM**: marca curta, no estilo FiveM/MTA. "Hexa" = seis, sem citar GTA, "VI" ou Vice City.
+- **HexMP**: nome completo (HexM Multiplayer), usado no GitHub, nos crates (`hexmp-*`) e em textos formais.
+- Sempre com o aviso: projeto independente, não afiliado à Rockstar Games, Take-Two ou Cfx.re.
+
+**GitHub** (organização [`hexmphq`](https://github.com/hexmphq), pois `hexmp` já é usuário):
+
+| Repositório | Visibilidade | Conteúdo |
+|---|---|---|
+| `hexmphq/hexmp` | público | protocol, sim, server, scripting, voice, store, headless-bot, sdk, ui-kit, panel, rp-kit, docs |
+| `hexmphq/hexmp-private` | privado | launcher, client, adapter, anti-cheat, platform, native |
+
+**Domínios** (checados em 20/11/2026 via RDAP/DNS; nenhum comprado ainda):
+
+| Domínio | Situação | Uso sugerido |
+|---|---|---|
+| `hexm.gg` | livre | **principal** (site, launcher, server list) |
+| `hexm.com.br` | livre | **comprar junto**: proteção da marca no Brasil |
+| `hexm.dev` | livre | docs e SDK (opcional) |
+| `hexm.net`, `hexm.io` | livres | defensivos (opcional) |
+| `hexamp.gg`, `hexamp.com.br` | livres | defensivos contra confusão (opcional) |
+| `hexm.com`, `hexm.org`, `hexm.app`, `hexamp.com`, `hexmrp.com` | ocupados | — |
+
+Antes de lançar: busca de marca no INPI (classes 9 e 41) e registro de "HexM" se estiver livre.
+
+---
+
 ## Estrutura de repositório
 
-> Visão lógica completa. Na prática fica dividida em **repositório público** e **privado** (ver Licenças).
+> Visão lógica completa. Na prática fica dividida em **repositório público** e **privado** (ver Nome e domínios / Licenças).
 
 ```
-roleplay-gta6/
+hexmp/
 ├─ crates/
 │  ├─ protocol/      # mensagens, tipos compartilhados
 │  ├─ sim/           # entidades, sync, validação (cliente+servidor)
@@ -511,5 +540,5 @@ roleplay-gta6/
 
 ## Decisões em aberto
 
-Nenhuma decisão de stack em aberto. Pendências fora da técnica: nome do projeto, revisão jurídica (licença, LGPD, monetização) e certificado de code signing.
+Nenhuma decisão de stack em aberto. Pendências fora da técnica: compra dos domínios (`hexm.gg` + `hexm.com.br`), busca/registro de marca no INPI, exigir 2FA na organização `hexmphq`, revisão jurídica (licença, LGPD, monetização) e certificado de code signing.
 
