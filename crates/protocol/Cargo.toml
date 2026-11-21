@@ -1,0 +1,8 @@
+[package]
+name = "hexmp-protocol"
+description = "Mensagens de rede do HexMP"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
