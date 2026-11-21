@@ -11,6 +11,19 @@ use std::time::{Duration, SystemTime};
 
 pub type ClientId = u64;
 
+/// Como o servidor aceita conexões.
+#[derive(Debug, Clone)]
+pub enum NetAuth {
+    /// Qualquer um conecta e diz o próprio nome. Só para desenvolvimento.
+    Insecure,
+    /// Só entra quem tem connect token assinado com `key` (emitido pelo `hexmp-auth`).
+    /// `public_addrs` precisa bater com os endereços que o serviço põe no token.
+    Secure {
+        key: hexmp_auth::ServerKey,
+        public_addrs: Vec<SocketAddr>,
+    },
+}
+
 #[derive(Debug)]
 pub enum NetEvent {
     Connected(ClientId),
@@ -25,6 +38,10 @@ pub trait Transport {
     fn disconnect(&mut self, client: ClientId);
     /// Envia o que foi enfileirado neste tick.
     fn flush(&mut self);
+    /// Dados do connect token (identidade), se a conexão for autenticada.
+    fn user_data(&self, _client: ClientId) -> Option<[u8; 256]> {
+        None
+    }
 }
 
 pub struct RenetTransport {
@@ -34,21 +51,33 @@ pub struct RenetTransport {
 }
 
 impl RenetTransport {
-    /// Abre o socket UDP. Autenticação "unsecure" por enquanto:
-    /// os connect tokens assinados da plataforma entram com o crate `platform`.
-    pub fn bind(addr: SocketAddr, max_clients: usize) -> std::io::Result<Self> {
+    /// Abre o socket UDP.
+    pub fn bind(addr: SocketAddr, max_clients: usize, auth: NetAuth) -> std::io::Result<Self> {
         let socket = UdpSocket::bind(addr)?;
         let local_addr = socket.local_addr()?;
         let current_time = SystemTime::now()
             .duration_since(SystemTime::UNIX_EPOCH)
             .unwrap_or_default();
+        let (authentication, public_addrs) = match auth {
+            NetAuth::Insecure => (ServerAuthentication::Unsecure, vec![local_addr]),
+            NetAuth::Secure { key, public_addrs } => (
+                ServerAuthentication::Secure {
+                    private_key: *key.bytes(),
+                },
+                if public_addrs.is_empty() {
+                    vec![local_addr]
+                } else {
+                    public_addrs
+                },
+            ),
+        };
         let config = ServerSetupConfig {
             current_time,
             max_token_lifetime: 30,
             max_clients,
             protocol_id: NETCODE_PROTOCOL_ID,
-            socket_addresses: vec![vec![local_addr]],
-            authentication: ServerAuthentication::Unsecure,
+            socket_addresses: vec![public_addrs],
+            authentication,
         };
         let netcode = NetcodeServerTransport::new(
             config,
@@ -106,6 +135,10 @@ impl Transport for RenetTransport {
 
     fn flush(&mut self) {
         self.netcode.send_packets(&mut self.server);
+    }
+
+    fn user_data(&self, client: ClientId) -> Option<[u8; 256]> {
+        self.netcode.user_data(client)
     }
 }
 

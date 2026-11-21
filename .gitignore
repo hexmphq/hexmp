@@ -8,3 +8,6 @@ server.local.toml
 *.db
 *.db-wal
 *.db-shm
+
+# Chaves de assinatura
+*.key

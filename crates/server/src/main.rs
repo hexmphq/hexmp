@@ -1,14 +1,16 @@
 use hexmp_protocol::{DEFAULT_PORT, PROTOCOL_VERSION};
 use hexmp_scripting::{EngineConfig, ScriptEngine};
-use hexmp_server::{GameServer, ServerConfig, transport::RenetTransport};
+use hexmp_server::transport::{NetAuth, RenetTransport};
+use hexmp_server::{GameServer, ServerConfig};
 use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
-const USAGE: &str = "uso: hexmp-server [--bind 0.0.0.0:30120] [--max-clients 64] \
-[--resources ./resources]... [--db URL] [--hot-reload SEGUNDOS] [--seconds N]";
+const USAGE: &str = "uso: hexmp-server (--key server.key [--public-addr IP:PORTA]... | --insecure) \
+[--bind 0.0.0.0:30120] [--max-clients 64] [--resources ./resources]... [--db URL] \
+[--hot-reload SEGUNDOS] [--seconds N]";
 
 fn main() {
     tracing_subscriber::fmt()
@@ -23,8 +25,15 @@ fn main() {
     let mut resources: Vec<PathBuf> = Vec::new();
     let mut db_url: Option<String> = None;
     let mut hot_reload: Option<u64> = None;
+    let mut key_file: Option<PathBuf> = std::env::var("HEXMP_KEY_FILE").ok().map(Into::into);
+    let mut public_addrs: Vec<SocketAddr> = Vec::new();
+    let mut insecure = false;
     let mut args = std::env::args().skip(1);
     while let Some(arg) = args.next() {
+        if arg == "--insecure" {
+            insecure = true;
+            continue;
+        }
         let value = args.next();
         let parsed = match arg.as_str() {
             "--bind" => value.and_then(|v| v.parse().ok()).map(|v| bind = v),
@@ -34,6 +43,10 @@ fn main() {
                 .map(|v| seconds = Some(v)),
             "--resources" => value.map(|v| resources.push(v.into())),
             "--db" => value.map(|v| db_url = Some(v)),
+            "--key" => value.map(|v| key_file = Some(v.into())),
+            "--public-addr" => value
+                .and_then(|v| v.parse().ok())
+                .map(|v| public_addrs.push(v)),
             "--hot-reload" => value
                 .and_then(|v| v.parse().ok())
                 .map(|v| hot_reload = Some(v)),
@@ -45,7 +58,29 @@ fn main() {
         }
     }
 
-    let transport = match RenetTransport::bind(bind, max_clients) {
+    let auth = match (&key_file, insecure) {
+        (Some(path), false) => match hexmp_auth::ServerKey::load(path) {
+            Ok(key) => NetAuth::Secure { key, public_addrs },
+            Err(e) => {
+                eprintln!("chave {}: {e}", path.display());
+                std::process::exit(1);
+            }
+        },
+        (None, true) => {
+            tracing::warn!(
+                "MODO INSEGURO: qualquer um entra com qualquer nome. Só para desenvolvimento."
+            );
+            NetAuth::Insecure
+        }
+        _ => {
+            eprintln!(
+                "escolha um modo:\n  --key server.key   (contas reais; gere com `hexmp-auth keygen --key server.key`)\n  --insecure         (desenvolvimento: o nome do jogador vira a conta)\n\n{USAGE}"
+            );
+            std::process::exit(2);
+        }
+    };
+    let require_auth = matches!(auth, NetAuth::Secure { .. });
+    let transport = match RenetTransport::bind(bind, max_clients, auth) {
         Ok(t) => t,
         Err(e) => {
             eprintln!("não consegui abrir {bind}: {e}");
@@ -54,6 +89,7 @@ fn main() {
     };
     let config = ServerConfig {
         hot_reload: hot_reload.map(Duration::from_secs),
+        require_auth,
         ..ServerConfig::default()
     };
     tracing::info!(
@@ -70,7 +106,23 @@ fn main() {
     for root in &resources[1..] {
         engine.add_root(root);
     }
-    if let Some(url) = db_url.or_else(|| std::env::var("HEXMP_DB").ok()) {
+    let db_url = db_url.or_else(|| std::env::var("HEXMP_DB").ok());
+    // Conexão separada só para bans (mesmo banco do hexmp-auth).
+    let bans = match &db_url {
+        Some(url) if require_auth => {
+            let mut db = hexmp_db::Db::connect(url).unwrap_or_else(|e| {
+                eprintln!("não consegui conectar ao banco: {e}");
+                std::process::exit(1);
+            });
+            if let Err(e) = hexmp_auth::migrate(&mut db) {
+                eprintln!("migração de contas: {e}");
+                std::process::exit(1);
+            }
+            Some(db)
+        }
+        _ => None,
+    };
+    if let Some(url) = db_url {
         match hexmp_db::Db::connect(&url) {
             Ok(db) => {
                 tracing::info!(backend = ?db.backend(), "banco conectado");
@@ -107,6 +159,9 @@ fn main() {
         });
     }
     let mut server = GameServer::new(transport, config).with_scripts(engine);
+    if let Some(db) = bans {
+        server = server.with_bans(db);
+    }
     server.run(|_| {
         interrupted.load(Ordering::Relaxed) || deadline.is_some_and(|d| Instant::now() >= d)
     });

@@ -6,7 +6,7 @@ use hexmp_protocol::{
     ServerMessage, Vec3, decode, encode,
 };
 use renet2::{ConnectionConfig, DefaultChannel, RenetClient};
-use renet2_netcode::{ClientAuthentication, NativeSocket, NetcodeClientTransport};
+use renet2_netcode::{ClientAuthentication, ConnectToken, NativeSocket, NetcodeClientTransport};
 use std::collections::{HashMap, HashSet};
 use std::net::{SocketAddr, UdpSocket};
 use std::time::{Duration, SystemTime};
@@ -53,10 +53,46 @@ pub struct Bot {
 }
 
 impl Bot {
+    /// Conexão sem autenticação (servidor com `--insecure`).
     pub fn connect(
         server: SocketAddr,
         name: impl Into<String>,
         client_id: u64,
+        behavior: Behavior,
+    ) -> std::io::Result<Self> {
+        let auth = ClientAuthentication::Unsecure {
+            socket_id: 0,
+            server_addr: server,
+            client_id,
+            user_data: None,
+            protocol_id: NETCODE_PROTOCOL_ID,
+        };
+        Self::connect_with(server, name.into(), auth, behavior)
+    }
+
+    /// Conexão com connect token emitido pelo `hexmp-auth`.
+    pub fn connect_with_token(
+        token: ConnectToken,
+        name: impl Into<String>,
+        behavior: Behavior,
+    ) -> std::io::Result<Self> {
+        let server = token
+            .server_addresses
+            .iter()
+            .flatten()
+            .next()
+            .copied()
+            .ok_or_else(|| std::io::Error::other("token sem endereço de servidor"))?;
+        let auth = ClientAuthentication::Secure {
+            connect_token: token,
+        };
+        Self::connect_with(server, name.into(), auth, behavior)
+    }
+
+    fn connect_with(
+        server: SocketAddr,
+        name: String,
+        auth: ClientAuthentication,
         behavior: Behavior,
     ) -> std::io::Result<Self> {
         let socket = UdpSocket::bind(if server.is_ipv4() {
@@ -67,13 +103,6 @@ impl Bot {
         let now = SystemTime::now()
             .duration_since(SystemTime::UNIX_EPOCH)
             .unwrap_or_default();
-        let auth = ClientAuthentication::Unsecure {
-            socket_id: 0,
-            server_addr: server,
-            client_id,
-            user_data: None,
-            protocol_id: NETCODE_PROTOCOL_ID,
-        };
         let socket = NativeSocket::new(socket).map_err(std::io::Error::other)?;
         let transport =
             NetcodeClientTransport::new(now, auth, socket).map_err(std::io::Error::other)?;
@@ -82,7 +111,7 @@ impl Bot {
             false,
         );
         Ok(Self {
-            name: name.into(),
+            name,
             behavior,
             client,
             transport,

@@ -17,3 +17,4 @@ tracing-subscriber.workspace = true
 ctrlc.workspace = true
 hexmp-scripting.workspace = true
 hexmp-db.workspace = true
+hexmp-auth.workspace = true

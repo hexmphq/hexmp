@@ -1,0 +1,22 @@
+[package]
+name = "hexmp-auth"
+description = "Contas, senhas, bans e connect tokens do HexMP"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[dependencies]
+hexmp-protocol.workspace = true
+hexmp-db.workspace = true
+renet2_netcode.workspace = true
+argon2.workspace = true
+base64.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tiny_http.workspace = true
+uuid.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+ctrlc.workspace = true

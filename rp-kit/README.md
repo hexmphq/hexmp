@@ -11,8 +11,8 @@ Recursos base de roleplay, em Luau, licença MIT OR Apache-2.0. Use como estão 
 ## Rodando
 
 ```
-hexmp-server --resources rp-kit --resources resources --db sqlite:hexmp.db
-hexmp-server --resources rp-kit --db postgres://usuario:senha@localhost/hexmp
+hexmp-server --insecure --resources rp-kit --resources resources --db sqlite:hexmp.db
+hexmp-server --key server.key --resources rp-kit --db postgres://usuario:senha@localhost/hexmp
 ```
 
 As tabelas são criadas pelas migrações de cada recurso (`sql/*.sql`) na primeira vez que ele sobe.
@@ -57,4 +57,4 @@ Um módulo novo segue o mesmo contrato: `exports.call("rp-core", "registerModule
 - `rp-money`: `get(playerId)`, `add(playerId, "cash"|"bank", valor, motivo?)`, `remove(...)`, `transfer(de, para, valor, motivo?)`.
 - `rp-inventory`: `get`, `add(playerId, item, n)`, `remove`, `has(playerId, item, n?)`, `registerItem(nome, {label, weight, usable})`.
 
-Valores de dinheiro são inteiros. A conta do jogador é provisória (`dev:<nome>`) até a autenticação existir.
+Valores de dinheiro são inteiros. A conta do jogador vem do token de login (`hexmp:<uuid>`); com `--insecure` ela é `dev:<nome>`. Veja [docs/autenticacao.md](../docs/autenticacao.md).

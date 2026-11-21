@@ -1,10 +1,12 @@
 //! Servidor real + bots reais via UDP em localhost.
 
+use hexmp_auth::{AccountStore, Identity, ServerKey, issue_token, read_token};
 use hexmp_db::Db;
 use hexmp_headless_bot::{Behavior, Bot};
 use hexmp_protocol::ScriptValue;
 use hexmp_scripting::{EngineConfig, ScriptEngine};
-use hexmp_server::{GameServer, ServerConfig, transport::RenetTransport};
+use hexmp_server::transport::{NetAuth, RenetTransport};
+use hexmp_server::{GameServer, ServerConfig};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, mpsc};
@@ -12,32 +14,59 @@ use std::time::{Duration, Instant};
 
 struct RunningServer {
     addr: std::net::SocketAddr,
+    /// Com chave: modo seguro, entra só com token.
+    key: Option<ServerKey>,
     stop: Arc<AtomicBool>,
     handle: Option<std::thread::JoinHandle<()>>,
 }
 
 impl RunningServer {
     fn start() -> Self {
-        Self::start_with(Vec::new(), None)
+        Self::start_with(Vec::new(), None, None)
     }
 
-    /// Servidor com rp-kit + exemplos do repositório, gravando no SQLite `db`.
+    /// Modo seguro, sem scripts; com `db`, confere bans.
+    fn start_secure(db: Option<String>) -> Self {
+        Self::start_with(Vec::new(), db, Some(ServerKey::generate()))
+    }
+
+    /// Servidor seguro com rp-kit + exemplos do repositório, gravando no SQLite `db`.
     fn with_rp_kit(db: &str) -> Self {
         let repo = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
         Self::start_with(
             vec![repo.join("rp-kit"), repo.join("resources")],
             Some(db.to_string()),
+            Some(ServerKey::generate()),
         )
     }
 
-    fn start_with(roots: Vec<PathBuf>, db: Option<String>) -> Self {
+    fn start_with(roots: Vec<PathBuf>, db: Option<String>, key: Option<ServerKey>) -> Self {
         let stop = Arc::new(AtomicBool::new(false));
         let (tx, rx) = mpsc::channel();
         let stop_flag = stop.clone();
+        let server_key = key.clone();
         let handle = std::thread::spawn(move || {
-            let transport = RenetTransport::bind("127.0.0.1:0".parse().unwrap(), 16).unwrap();
+            let auth = match &key {
+                Some(key) => NetAuth::Secure {
+                    key: key.clone(),
+                    public_addrs: Vec::new(),
+                },
+                None => NetAuth::Insecure,
+            };
+            let transport = RenetTransport::bind("127.0.0.1:0".parse().unwrap(), 16, auth).unwrap();
             tx.send(transport.local_addr()).unwrap();
-            let mut server = GameServer::new(transport, ServerConfig::default());
+            let config = ServerConfig {
+                require_auth: key.is_some(),
+                ..ServerConfig::default()
+            };
+            let mut server = GameServer::new(transport, config);
+            if key.is_some()
+                && let Some(url) = &db
+            {
+                let mut bans = Db::connect(url).unwrap();
+                hexmp_auth::migrate(&mut bans).unwrap();
+                server = server.with_bans(bans);
+            }
             if let Some((first, rest)) = roots.split_first() {
                 let mut engine = ScriptEngine::new(first, EngineConfig::default());
                 for root in rest {
@@ -59,9 +88,22 @@ impl RunningServer {
         let addr = rx.recv_timeout(Duration::from_secs(5)).unwrap();
         Self {
             addr,
+            key: server_key,
             stop,
             handle: Some(handle),
         }
+    }
+
+    /// Bot autenticado como `identity` (o servidor precisa estar em modo seguro).
+    fn bot_as(&self, identity: &Identity, client_id: u64) -> Bot {
+        let key = self.key.as_ref().expect("servidor em modo seguro");
+        let token = issue_token(key, &[self.addr], client_id, identity).unwrap();
+        Bot::connect_with_token(
+            read_token(&token).unwrap(),
+            &identity.display_name,
+            Behavior::Idle,
+        )
+        .unwrap()
     }
 }
 
@@ -204,7 +246,14 @@ fn ok1(r: hexmp_headless_bot::RpcResult) -> ScriptValue {
 
 /// Conecta e espera entrar no mundo.
 fn join(server: &RunningServer, name: &str, client_id: u64) -> Vec<Bot> {
-    let mut bots = vec![Bot::connect(server.addr, name, client_id, Behavior::Idle).unwrap()];
+    let bot = match server.key {
+        Some(_) => server.bot_as(
+            &Identity::new(format!("hexmp:test-{name}"), name),
+            client_id,
+        ),
+        None => Bot::connect(server.addr, name, client_id, Behavior::Idle).unwrap(),
+    };
+    let mut bots = vec![bot];
     assert!(pump(&mut bots, Duration::from_secs(10), |b| b[0]
         .player_id
         .is_some()));
@@ -346,5 +395,74 @@ fn character_money_and_inventory_survive_restart() {
     assert_eq!(
         call(&mut other, "rp.characters.select", &[char_id]),
         Err("personagem não encontrado".into())
+    );
+}
+
+#[test]
+fn secure_server_ignores_clients_without_valid_token() {
+    let server = RunningServer::start_secure(None);
+    // Sem token: o netcode nem responde.
+    let mut bots = vec![Bot::connect(server.addr, "sem-token", 6000, Behavior::Idle).unwrap()];
+    // Token assinado com outra chave.
+    let forged = issue_token(
+        &ServerKey::generate(),
+        &[server.addr],
+        6001,
+        &Identity::new("hexmp:admin", "admin"),
+    )
+    .unwrap();
+    bots.push(
+        Bot::connect_with_token(read_token(&forged).unwrap(), "falso", Behavior::Idle).unwrap(),
+    );
+    // Token de verdade entra, e o nome vem do token, não do Hello.
+    bots.push(server.bot_as(&Identity::new("hexmp:ok", "Legitimo"), 6002));
+
+    let joined = pump(&mut bots, Duration::from_secs(10), |b| {
+        b[2].player_id.is_some()
+    });
+    assert!(joined, "token válido não entrou");
+    pump(&mut bots, Duration::from_secs(1), |_| false);
+    assert!(bots[0].player_id.is_none(), "cliente sem token entrou");
+    assert!(bots[1].player_id.is_none(), "token forjado entrou");
+}
+
+#[test]
+fn banned_account_is_rejected_and_unban_lets_in() {
+    let db = temp_db("ban");
+    let mut store = AccountStore::open(&db).unwrap();
+    let identity = store.register("Trapaceiro", "senha-forte-123").unwrap();
+    store.ban(&identity.account, "aimbot", None).unwrap();
+
+    let server = RunningServer::start_secure(Some(db.clone()));
+    let mut bots = vec![server.bot_as(&identity, 7000)];
+    assert!(pump(&mut bots, Duration::from_secs(10), |b| b[0]
+        .rejected
+        .is_some()));
+    let reason = bots[0].rejected.clone().unwrap();
+    assert!(reason.contains("aimbot"), "{reason}");
+    assert!(bots[0].player_id.is_none());
+
+    store.unban(&identity.account).unwrap();
+    let mut bots = vec![server.bot_as(&identity, 7001)];
+    assert!(pump(&mut bots, Duration::from_secs(10), |b| b[0]
+        .player_id
+        .is_some()));
+}
+
+#[test]
+fn same_account_twice_drops_the_older_session() {
+    let server = RunningServer::start_secure(None);
+    let identity = Identity::new("hexmp:dupla", "Dupla");
+    let mut first = vec![server.bot_as(&identity, 8000)];
+    assert!(pump(&mut first, Duration::from_secs(10), |b| b[0]
+        .player_id
+        .is_some()));
+    let mut bots = vec![first.pop().unwrap(), server.bot_as(&identity, 8001)];
+    assert!(pump(&mut bots, Duration::from_secs(10), |b| {
+        b[1].player_id.is_some() && b[0].rejected.is_some()
+    }));
+    assert_eq!(
+        bots[0].rejected.as_deref(),
+        Some("conta conectada em outro lugar")
     );
 }

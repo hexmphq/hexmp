@@ -2,6 +2,8 @@
 
 pub mod transport;
 
+use hexmp_auth::{Identity, ban_check, parse_ban};
+use hexmp_db::{Db, Request, Ticket};
 use hexmp_protocol::{
     ClientMessage, MAX_NAME_LEN, PROTOCOL_VERSION, Payload, PlayerId, ServerMessage, decode, encode,
 };
@@ -22,6 +24,8 @@ pub struct ServerConfig {
     pub max_bad_messages: u32,
     /// Verifica a cada N segundos se arquivos de recursos mudaram e os reinicia.
     pub hot_reload: Option<Duration>,
+    /// Exige identidade no connect token (transporte [`transport::NetAuth::Secure`]).
+    pub require_auth: bool,
 }
 
 impl Default for ServerConfig {
@@ -32,6 +36,7 @@ impl Default for ServerConfig {
             hello_timeout: Duration::from_secs(5),
             max_bad_messages: 10,
             hot_reload: None,
+            require_auth: false,
         }
     }
 }
@@ -42,6 +47,16 @@ struct Session {
     connected_at: Instant,
     last_input_seq: Option<u32>,
     bad_messages: u32,
+    account: Option<String>,
+    /// Esperando a checagem de ban para entrar.
+    pending: Option<PendingJoin>,
+}
+
+#[derive(Debug)]
+struct PendingJoin {
+    ticket: Ticket,
+    name: String,
+    account: String,
 }
 
 pub struct GameServer<T: Transport> {
@@ -54,6 +69,8 @@ pub struct GameServer<T: Transport> {
     events: Vec<NetEvent>,
     scripts: Option<ScriptEngine>,
     since_reload_check: Duration,
+    /// Banco com a tabela `hexmp_bans` (o mesmo do `hexmp-auth`).
+    bans: Option<Db>,
 }
 
 impl<T: Transport> GameServer<T> {
@@ -67,12 +84,19 @@ impl<T: Transport> GameServer<T> {
             events: Vec::new(),
             scripts: None,
             since_reload_check: Duration::ZERO,
+            bans: None,
         }
     }
 
     /// Liga o motor de scripts. Recursos devem ser iniciados antes ou depois via [`Self::scripts_mut`].
     pub fn with_scripts(mut self, engine: ScriptEngine) -> Self {
         self.scripts = Some(engine);
+        self
+    }
+
+    /// Confere bans no banco antes de deixar cada jogador entrar.
+    pub fn with_bans(mut self, db: Db) -> Self {
+        self.bans = Some(db);
         self
     }
 
@@ -105,6 +129,7 @@ impl<T: Transport> GameServer<T> {
         }
         self.events = events;
 
+        self.poll_bans();
         self.kick_silent_clients();
         self.run_scripts(dt);
         self.world.step();
@@ -145,6 +170,8 @@ impl<T: Transport> GameServer<T> {
                         connected_at: Instant::now(),
                         last_input_seq: None,
                         bad_messages: 0,
+                        account: None,
+                        pending: None,
                     },
                 );
             }
@@ -182,10 +209,30 @@ impl<T: Transport> GameServer<T> {
                         format!("versão do protocolo {version}, servidor usa {PROTOCOL_VERSION}"),
                     );
                 }
-                let Some(name) = sanitize_name(&name) else {
-                    return self.reject(client, "nome inválido".into());
+                if session.pending.is_some() {
+                    return;
+                }
+                let (name, account) = if self.config.require_auth {
+                    // Nome e conta vêm do token assinado; o `name` do Hello é ignorado.
+                    let identity = self
+                        .transport
+                        .user_data(client)
+                        .and_then(|d| Identity::decode(&d).ok());
+                    let Some(identity) = identity else {
+                        return self.reject(client, "conexão sem identidade válida".into());
+                    };
+                    let Some(name) = sanitize_name(&identity.display_name) else {
+                        return self.reject(client, "nome inválido".into());
+                    };
+                    (name, identity.account)
+                } else {
+                    let Some(name) = sanitize_name(&name) else {
+                        return self.reject(client, "nome inválido".into());
+                    };
+                    let account = format!("dev:{name}");
+                    (name, account)
                 };
-                self.join(client, name);
+                self.begin_join(client, name, account);
             }
             ClientMessage::Input { seq, position } => {
                 let Some(id) = session.player else {
@@ -306,18 +353,76 @@ impl<T: Transport> GameServer<T> {
             .map(|(c, _)| *c)
     }
 
-    fn join(&mut self, client: ClientId, name: String) {
+    fn begin_join(&mut self, client: ClientId, name: String, account: String) {
+        // Mesma conta conectada em outro lugar: a sessão antiga sai.
+        let old: Vec<ClientId> = self
+            .sessions
+            .iter()
+            .filter(|(c, s)| **c != client && s.account.as_deref() == Some(account.as_str()))
+            .map(|(c, _)| *c)
+            .collect();
+        for c in old {
+            self.reject(c, "conta conectada em outro lugar".into());
+        }
+        match &mut self.bans {
+            Some(db) => {
+                let ticket = db.submit(Request::Run(ban_check(&account)));
+                if let Some(s) = self.sessions.get_mut(&client) {
+                    s.account = Some(account.clone());
+                    s.pending = Some(PendingJoin {
+                        ticket,
+                        name,
+                        account,
+                    });
+                }
+            }
+            None => self.join(client, name, account),
+        }
+    }
+
+    fn poll_bans(&mut self) {
+        let Some(db) = &mut self.bans else {
+            return;
+        };
+        for (ticket, result) in db.poll() {
+            let Some((client, pending)) = self.sessions.iter_mut().find_map(|(c, s)| {
+                if s.pending.as_ref().is_some_and(|p| p.ticket == ticket) {
+                    s.pending.take().map(|p| (*c, p))
+                } else {
+                    None
+                }
+            }) else {
+                continue; // desconectou antes da resposta
+            };
+            match result {
+                Ok(rows) => match parse_ban(&rows) {
+                    Some(ban) => self.reject(client, ban.to_string()),
+                    None => self.join(client, pending.name, pending.account),
+                },
+                Err(e) => {
+                    // Na dúvida, não entra.
+                    tracing::error!("checagem de ban falhou: {e}");
+                    self.reject(
+                        client,
+                        "não foi possível verificar a conta; tente de novo".into(),
+                    );
+                }
+            }
+        }
+    }
+
+    fn join(&mut self, client: ClientId, name: String, account: String) {
         let player = self.world.spawn_player(name.clone());
         let (id, spawn) = (player.id, player.position);
         if let Some(s) = self.sessions.get_mut(&client) {
             s.player = Some(id);
+            s.account = Some(account.clone());
         }
         tracing::info!(client, id, %name, "entrou no mundo");
         if let Some(engine) = &mut self.scripts {
             engine.player_joined(PlayerInfo {
                 id,
-                // Provisório até a autenticação: a conta é o nome.
-                account: format!("dev:{name}"),
+                account,
                 name: name.clone(),
                 position: spawn,
             });
@@ -367,7 +472,9 @@ impl<T: Transport> GameServer<T> {
         let silent: Vec<ClientId> = self
             .sessions
             .iter()
-            .filter(|(_, s)| s.player.is_none() && s.connected_at.elapsed() > timeout)
+            .filter(|(_, s)| {
+                s.player.is_none() && s.pending.is_none() && s.connected_at.elapsed() > timeout
+            })
             .map(|(c, _)| *c)
             .collect();
         for client in silent {

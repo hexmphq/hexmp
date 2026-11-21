@@ -3,12 +3,14 @@ use hexmp_protocol::DEFAULT_PORT;
 use std::net::SocketAddr;
 use std::time::{Duration, Instant, SystemTime};
 
-const USAGE: &str = "uso: hexmp-headless-bot [--server 127.0.0.1:30120] [--bots 10] [--seconds 10]";
+const USAGE: &str = "uso: hexmp-headless-bot [--server 127.0.0.1:30120] [--bots 10] [--seconds 10] \
+[--key server.key]\n  --key: gera tokens de teste com a chave do servidor (servidor em modo seguro)";
 
 fn main() {
     let mut server: SocketAddr = ([127, 0, 0, 1], DEFAULT_PORT).into();
     let mut count: u32 = 10;
     let mut seconds: u64 = 10;
+    let mut key: Option<hexmp_auth::ServerKey> = None;
     let mut args = std::env::args().skip(1);
     while let Some(arg) = args.next() {
         let value = args.next();
@@ -16,6 +18,9 @@ fn main() {
             "--server" => value.and_then(|v| v.parse().ok()).map(|v| server = v),
             "--bots" => value.and_then(|v| v.parse().ok()).map(|v| count = v),
             "--seconds" => value.and_then(|v| v.parse().ok()).map(|v| seconds = v),
+            "--key" => value
+                .and_then(|v| hexmp_auth::ServerKey::load(v.as_ref()).ok())
+                .map(|v| key = Some(v)),
             _ => None,
         };
         if parsed.is_none() {
@@ -35,8 +40,19 @@ fn main() {
                 radius: 5.0 + i as f32,
                 speed: 5.0,
             };
-            Bot::connect(server, format!("bot-{i}"), base_id + i as u64, walk)
-                .expect("não consegui abrir socket")
+            let name = format!("bot-{i}");
+            let id = base_id + i as u64;
+            match &key {
+                Some(key) => {
+                    let identity = hexmp_auth::Identity::new(format!("bot:{name}"), &name);
+                    let token = hexmp_auth::issue_token(key, &[server], id, &identity)
+                        .and_then(|t| hexmp_auth::read_token(&t))
+                        .expect("token");
+                    Bot::connect_with_token(token, name, walk)
+                }
+                None => Bot::connect(server, name, id, walk),
+            }
+            .expect("não consegui abrir socket")
         })
         .collect();
     println!("{count} bots conectando em {server} por {seconds}s");

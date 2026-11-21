@@ -11,6 +11,7 @@ publish.workspace = true
 hexmp-protocol.workspace = true
 renet2.workspace = true
 renet2_netcode.workspace = true
+hexmp-auth.workspace = true
 
 [dev-dependencies]
 hexmp-server.workspace = true
