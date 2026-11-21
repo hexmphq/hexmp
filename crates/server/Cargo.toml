@@ -10,3 +10,7 @@ publish.workspace = true
 [dependencies]
 hexmp-protocol.workspace = true
 hexmp-sim.workspace = true
+renet2.workspace = true
+renet2_netcode.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true

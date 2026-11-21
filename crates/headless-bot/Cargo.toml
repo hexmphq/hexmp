@@ -9,3 +9,8 @@ publish.workspace = true
 
 [dependencies]
 hexmp-protocol.workspace = true
+renet2.workspace = true
+renet2_netcode.workspace = true
+
+[dev-dependencies]
+hexmp-server.workspace = true

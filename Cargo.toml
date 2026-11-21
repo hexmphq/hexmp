@@ -12,6 +12,13 @@ publish = false
 [workspace.dependencies]
 hexmp-protocol = { path = "crates/protocol" }
 hexmp-sim = { path = "crates/sim" }
+hexmp-server = { path = "crates/server" }
+hexmp-headless-bot = { path = "crates/headless-bot" }
+bitcode = "0.6.9"
+renet2 = "1.0.1"
+renet2_netcode = "1.0.1"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
 [profile.release]
 lto = "thin"
