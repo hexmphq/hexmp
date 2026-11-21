@@ -3,6 +3,8 @@ use hexmp_scripting::{EngineConfig, ScriptEngine};
 use hexmp_server::{GameServer, ServerConfig, transport::RenetTransport};
 use std::net::SocketAddr;
 use std::path::PathBuf;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
 const USAGE: &str = "uso: hexmp-server [--bind 0.0.0.0:30120] [--max-clients 64] \
@@ -93,8 +95,24 @@ fn main() {
     tracing::info!(running = ?engine.running(), "recursos carregados");
 
     let deadline = seconds.map(|s| Instant::now() + Duration::from_secs(s));
+    // Ctrl+C / SIGTERM: sai do loop normalmente para gravar o pendente.
+    let interrupted = Arc::new(AtomicBool::new(false));
+    {
+        let flag = interrupted.clone();
+        let _ = ctrlc::set_handler(move || {
+            if flag.swap(true, Ordering::Relaxed) {
+                // Segundo Ctrl+C: sai na hora.
+                std::process::exit(130);
+            }
+        });
+    }
     let mut server = GameServer::new(transport, config).with_scripts(engine);
-    server.run(|_| deadline.is_some_and(|d| Instant::now() >= d));
+    server.run(|_| {
+        interrupted.load(Ordering::Relaxed) || deadline.is_some_and(|d| Instant::now() >= d)
+    });
+    if interrupted.load(Ordering::Relaxed) {
+        tracing::info!("encerrando: gravando dados pendentes (Ctrl+C de novo para forçar)");
+    }
     if let Some(engine) = server.scripts_mut() {
         // Para os recursos (gravam o pendente) e espera o banco terminar.
         engine.shutdown();

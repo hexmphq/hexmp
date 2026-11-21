@@ -3,3 +3,8 @@
 *.log
 .env
 server.local.toml
+
+# Bancos SQLite locais
+*.db
+*.db-wal
+*.db-shm
