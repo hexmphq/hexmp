@@ -15,6 +15,8 @@ pub struct Manifest {
     pub shared_scripts: Vec<String>,
     pub server_scripts: Vec<String>,
     pub client_scripts: Vec<String>,
+    /// Arquivos `.sql` aplicados uma vez cada, em ordem, antes dos scripts.
+    pub migrations: Vec<String>,
 }
 
 pub fn parse(source: &str, chunk_name: &str) -> Result<Manifest, String> {
@@ -42,6 +44,7 @@ pub fn parse(source: &str, chunk_name: &str) -> Result<Manifest, String> {
         shared_scripts: script_list(&env, "shared_scripts")?,
         server_scripts: script_list(&env, "server_scripts")?,
         client_scripts: script_list(&env, "client_scripts")?,
+        migrations: file_list(&env, "migrations", &[".sql"])?,
     };
     Ok(m)
 }
@@ -75,13 +78,20 @@ fn string_list(env: &Table, key: &str) -> Result<Vec<String>, String> {
 
 /// Lista de arquivos de script: caminhos relativos, sem `..`, terminando em `.luau` ou `.lua`.
 fn script_list(env: &Table, key: &str) -> Result<Vec<String>, String> {
+    file_list(env, key, &[".luau", ".lua"])
+}
+
+fn file_list(env: &Table, key: &str, extensions: &[&str]) -> Result<Vec<String>, String> {
     let list = string_list(env, key)?;
     for p in &list {
         if !is_safe_relative(p) {
             return Err(format!("caminho inválido em `{key}`: {p}"));
         }
-        if !(p.ends_with(".luau") || p.ends_with(".lua")) {
-            return Err(format!("`{p}` precisa terminar em .luau ou .lua"));
+        if !extensions.iter().any(|e| p.ends_with(e)) {
+            return Err(format!(
+                "`{p}` precisa terminar em {}",
+                extensions.join(" ou ")
+            ));
         }
     }
     Ok(list)

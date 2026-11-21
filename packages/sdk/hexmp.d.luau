@@ -5,6 +5,8 @@ export type Vec3 = { x: number, y: number, z: number }
 
 export type Player = {
     id: number,
+    --- Identificador estável da conta (chave para dados persistentes).
+    account: string,
     name: string,
     position: Vec3,
 }
@@ -36,11 +38,19 @@ export type RpcOptions = {
     rateLimit: string?,
 }
 
+export type RpcReply = {
+    ok: (...Data) -> (),
+    fail: (message: string) -> (),
+}
+
 declare rpc: {
     --- Define um RPC chamável pelos clientes. O primeiro argumento é sempre o jogador.
     --- Os retornos voltam ao cliente; `error("msg")` volta como erro legível.
     define: ((name: string, handler: (player: Player, ...Data) -> ...Data) -> ())
         & ((name: string, options: RpcOptions, handler: (player: Player, ...Data) -> ...Data) -> ()),
+    --- Dentro de um handler: a resposta será dada depois (ex.: no callback do banco).
+    --- Sem resposta em 10 s, o cliente recebe erro de tempo esgotado.
+    defer: () -> RpcReply,
 }
 
 declare timer: {
@@ -56,6 +66,8 @@ declare players: {
     get: (id: number) -> Player?,
     list: () -> { Player },
     kick: (id: number, reason: string?) -> (),
+    --- Teleporta (sem validação de velocidade).
+    setPosition: (id: number, position: Vec3) -> (),
 }
 
 declare net: {
@@ -63,4 +75,25 @@ declare net: {
     emit: (player: number, name: string, ...Data) -> (),
     --- Envia um evento para todos os clientes no mundo.
     broadcast: (name: string, ...Data) -> (),
+}
+
+export type Row = { [string]: Data }
+export type DbCallback<T> = (result: T?, err: string?) -> ()
+export type DbStatement = { any } -- { sql, params?, expect = n? } ou { sql = ..., params = ... }
+
+--- Banco (PostgreSQL ou SQLite). Assíncrono: o resultado chega no callback, num tick seguinte.
+--- Pedidos de um recurso rodam em ordem. Placeholders `$1, $2...`.
+declare db: {
+    query: ((sql: string, params: { Data }?, cb: DbCallback<{ Row }>?) -> ()),
+    --- Callback recebe o número de linhas afetadas.
+    execute: ((sql: string, params: { Data }?, cb: DbCallback<number>?) -> ()),
+    --- Tudo ou nada. `expect = n` falha (e desfaz) se a instrução não afetar n linhas.
+    transaction: ((statements: { DbStatement }, cb: DbCallback<{ Data }>?) -> ()),
+}
+
+declare util: {
+    --- UUID v7 (ordenável por tempo).
+    uuid: () -> string,
+    --- Milissegundos desde 1970 (UTC).
+    now: () -> number,
 }

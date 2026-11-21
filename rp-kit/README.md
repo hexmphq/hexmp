@@ -1,3 +1,60 @@
 # rp-kit
 
-Em construção.
+Recursos base de roleplay, em Luau, licença MIT OR Apache-2.0. Use como estão ou como ponto de partida.
+
+| Recurso | O que faz |
+|---|---|
+| `rp-core` | Personagens por conta (até 3): criar, listar, selecionar, sair. Salva a posição. Coordena o carregamento dos módulos. |
+| `rp-money` | Dinheiro em mão (`cash`) e no banco (`bank`), transferências e extrato. |
+| `rp-inventory` | Inventário por personagem com peso máximo, uso e entrega de itens. |
+
+## Rodando
+
+```
+hexmp-server --resources rp-kit --resources resources --db sqlite:hexmp.db
+hexmp-server --resources rp-kit --db postgres://usuario:senha@localhost/hexmp
+```
+
+As tabelas são criadas pelas migrações de cada recurso (`sql/*.sql`) na primeira vez que ele sobe.
+
+## Como os dados são guardados
+
+- Enquanto o personagem está ativo, dinheiro e inventário ficam **em memória**: leitura e escrita instantâneas, sem esperar o banco.
+- A cada 5 s, o que mudou é gravado numa transação.
+- Operações críticas (transferência, entrega de item) gravam na hora.
+- Ao sair, deslogar ou parar o recurso, tudo que falta é gravado antes de liberar a memória.
+
+## Fluxo de personagem
+
+```
+cliente: rp.characters.select(id)
+rp-core: "rp:characterLoading"(playerId, personagem)
+módulos: carregam seus dados → exports "rp-core".moduleReady(playerId, RESOURCE_NAME)
+rp-core: quando todos responderam → teleporta, "rp:characterLoaded", responde o RPC
+saída:   "rp:characterUnloading"(playerId, personagem) → módulos gravam e liberam
+```
+
+Um módulo novo segue o mesmo contrato: `exports.call("rp-core", "registerModule", RESOURCE_NAME)` ao subir, escuta `rp:characterLoading` e responde `moduleReady`.
+
+## RPCs (cliente)
+
+| RPC | Argumentos | Retorno |
+|---|---|---|
+| `rp.characters.list` | — | `{ {id, firstName, lastName, birthdate} }` |
+| `rp.characters.create` | `{firstName, lastName, birthdate = "AAAA-MM-DD"}` | resumo do personagem |
+| `rp.characters.select` | `id` | resumo do personagem |
+| `rp.characters.logout` / `current` | — | `true` / resumo ou `nil` |
+| `rp.money.get` | — | `{cash, bank}` |
+| `rp.money.transfer` | `playerId, valor` | saldo do banco |
+| `rp.money.history` | `limite?` (1–50) | últimas movimentações |
+| `rp.inventory.get` | — | `{items, weight, maxWeight}` |
+| `rp.inventory.use` | `item` | quantidade restante |
+| `rp.inventory.give` | `playerId, item, quantidade` | `true` (até 3 m de distância) |
+
+## Exports (outros recursos)
+
+- `rp-core`: `getCharacter(playerId)`, `activeCharacters()`, `registerModule`, `moduleReady`.
+- `rp-money`: `get(playerId)`, `add(playerId, "cash"|"bank", valor, motivo?)`, `remove(...)`, `transfer(de, para, valor, motivo?)`.
+- `rp-inventory`: `get`, `add(playerId, item, n)`, `remove`, `has(playerId, item, n?)`, `registerItem(nome, {label, weight, usable})`.
+
+Valores de dinheiro são inteiros. A conta do jogador é provisória (`dev:<nome>`) até a autenticação existir.

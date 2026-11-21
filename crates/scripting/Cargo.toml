@@ -11,3 +11,5 @@ publish.workspace = true
 hexmp-protocol.workspace = true
 mlua.workspace = true
 tracing.workspace = true
+hexmp-db.workspace = true
+uuid.workspace = true

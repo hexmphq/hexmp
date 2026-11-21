@@ -107,6 +107,19 @@ impl World {
         Ok(())
     }
 
+    /// Move sem validar velocidade (spawn, seleção de personagem, admin).
+    pub fn teleport(&mut self, id: PlayerId, to: Vec3) -> Result<(), MoveError> {
+        let tick = self.tick;
+        let p = self.players.get_mut(&id).ok_or(MoveError::UnknownPlayer)?;
+        let in_bounds = [to.x, to.y, to.z].iter().all(|v| v.abs() <= WORLD_LIMIT);
+        if !to.is_finite() || !in_bounds {
+            return Err(MoveError::InvalidPosition);
+        }
+        p.position = to;
+        p.last_move_tick = tick;
+        Ok(())
+    }
+
     /// Jogadores dentro do raio. Linear por enquanto; grade espacial depois.
     pub fn visible_from(&self, center: Vec3, radius: f32) -> Vec<EntityState> {
         self.players

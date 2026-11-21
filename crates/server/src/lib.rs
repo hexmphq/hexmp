@@ -5,7 +5,7 @@ pub mod transport;
 use hexmp_protocol::{
     ClientMessage, MAX_NAME_LEN, PROTOCOL_VERSION, Payload, PlayerId, ServerMessage, decode, encode,
 };
-use hexmp_scripting::{Command, PlayerInfo, ScriptEngine, Target};
+use hexmp_scripting::{Command, PlayerInfo, RpcOutcome, ScriptEngine, Target};
 use hexmp_sim::World;
 use std::collections::HashMap;
 use std::time::{Duration, Instant};
@@ -214,9 +214,13 @@ impl<T: Transport> GameServer<T> {
                         Err(e.to_string())
                     }
                     Ok(args) => match &mut self.scripts {
-                        Some(engine) => engine
-                            .call_rpc(player, &name, &args)
-                            .map(|v| Payload::from_values(&v)),
+                        Some(engine) => {
+                            match engine.call_rpc_deferrable(player, id, &name, &args) {
+                                RpcOutcome::Done(r) => r.map(|v| Payload::from_values(&v)),
+                                // Resposta chega depois, como Command::RpcReply.
+                                RpcOutcome::Deferred => return,
+                            }
+                        }
                         None => Err(format!("rpc `{name}` não existe")),
                     },
                 };
@@ -268,6 +272,29 @@ impl<T: Transport> GameServer<T> {
                         self.reject(client, reason);
                     }
                 }
+                Command::Teleport { player, position } => {
+                    if self.world.teleport(player, position).is_ok()
+                        && let Some(client) = self.client_of(player)
+                    {
+                        self.send(client, &ServerMessage::Correction { position });
+                    }
+                }
+                Command::RpcReply {
+                    player,
+                    request,
+                    result,
+                } => {
+                    if let Some(client) = self.client_of(player) {
+                        let result = result.map(|v| Payload::from_values(&v));
+                        self.send(
+                            client,
+                            &ServerMessage::RpcResult {
+                                id: request,
+                                result,
+                            },
+                        );
+                    }
+                }
             }
         }
     }
@@ -289,6 +316,8 @@ impl<T: Transport> GameServer<T> {
         if let Some(engine) = &mut self.scripts {
             engine.player_joined(PlayerInfo {
                 id,
+                // Provisório até a autenticação: a conta é o nome.
+                account: format!("dev:{name}"),
                 name: name.clone(),
                 position: spawn,
             });

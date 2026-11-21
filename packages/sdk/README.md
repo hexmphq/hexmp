@@ -2,7 +2,7 @@
 
 Definições de tipo para escrever recursos em Luau.
 
-- [`hexmp.d.luau`](hexmp.d.luau): API de servidor (`events`, `exports`, `rpc`, `timer`, `players`, `net`).
+- [`hexmp.d.luau`](hexmp.d.luau): API de servidor (`events`, `exports`, `rpc`, `timer`, `players`, `net`, `db`, `util`).
 
 No VS Code com a extensão **luau-lsp**, adicione em `.vscode/settings.json`:
 
@@ -25,7 +25,8 @@ resources/
 ```lua
 -- resource.luau
 version = "1.0.0"
-dependencies = { "bank" }
+dependencies = { "rp-money" }
+migrations = { "sql/001_tabelas.sql" }   # rodam uma vez, em ordem
 shared_scripts = { "shared/config.luau" }
 server_scripts = { "server/main.luau" }
 ```
@@ -37,4 +38,6 @@ Regras do runtime:
 - Valores entre recursos e para a rede são **copiados** (nada de funções ou referências compartilhadas).
 - Um recurso com erro não derruba os outros. `--hot-reload 1` reinicia recursos quando os arquivos mudam.
 
-Exemplos: [`resources/bank`](../../resources/bank) e [`resources/shop`](../../resources/shop).
+- `db` só existe com o servidor iniciado com `--db URL` (ou `HEXMP_DB`). Use tipos portáveis: TEXT, BIGINT, DOUBLE PRECISION.
+
+Exemplos: [`rp-kit`](../../rp-kit) e [`resources/shop`](../../resources/shop).

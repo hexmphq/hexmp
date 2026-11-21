@@ -1,0 +1,15 @@
+[package]
+name = "hexmp-db"
+description = "Acesso a banco do HexMP (PostgreSQL e SQLite)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[dependencies]
+hexmp-protocol.workspace = true
+sqlx.workspace = true
+tokio.workspace = true
+flume.workspace = true
+tracing.workspace = true

@@ -1,5 +1,6 @@
 //! Servidor real + bots reais via UDP em localhost.
 
+use hexmp_db::Db;
 use hexmp_headless_bot::{Behavior, Bot};
 use hexmp_protocol::ScriptValue;
 use hexmp_scripting::{EngineConfig, ScriptEngine};
@@ -17,16 +18,19 @@ struct RunningServer {
 
 impl RunningServer {
     fn start() -> Self {
-        Self::start_with(None)
+        Self::start_with(Vec::new(), None)
     }
 
-    /// Servidor com os recursos de exemplo da pasta `resources/` do repositório.
-    fn with_example_resources() -> Self {
-        let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../resources");
-        Self::start_with(Some(root))
+    /// Servidor com rp-kit + exemplos do repositório, gravando no SQLite `db`.
+    fn with_rp_kit(db: &str) -> Self {
+        let repo = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+        Self::start_with(
+            vec![repo.join("rp-kit"), repo.join("resources")],
+            Some(db.to_string()),
+        )
     }
 
-    fn start_with(resources: Option<PathBuf>) -> Self {
+    fn start_with(roots: Vec<PathBuf>, db: Option<String>) -> Self {
         let stop = Arc::new(AtomicBool::new(false));
         let (tx, rx) = mpsc::channel();
         let stop_flag = stop.clone();
@@ -34,14 +38,23 @@ impl RunningServer {
             let transport = RenetTransport::bind("127.0.0.1:0".parse().unwrap(), 16).unwrap();
             tx.send(transport.local_addr()).unwrap();
             let mut server = GameServer::new(transport, ServerConfig::default());
-            if let Some(root) = resources {
-                let mut engine = ScriptEngine::new(root, EngineConfig::default());
+            if let Some((first, rest)) = roots.split_first() {
+                let mut engine = ScriptEngine::new(first, EngineConfig::default());
+                for root in rest {
+                    engine.add_root(root);
+                }
+                if let Some(url) = &db {
+                    engine = engine.with_db(Db::connect(url).unwrap());
+                }
                 for (name, r) in engine.start_all() {
                     r.unwrap_or_else(|e| panic!("recurso {name}: {e}"));
                 }
                 server = server.with_scripts(engine);
             }
             server.run(|_| stop_flag.load(Ordering::Relaxed));
+            if let Some(engine) = server.scripts_mut() {
+                engine.shutdown();
+            }
         });
         let addr = rx.recv_timeout(Duration::from_secs(5)).unwrap();
         Self {
@@ -160,49 +173,178 @@ fn wait_rpc(bots: &mut [Bot], id: u32) -> hexmp_headless_bot::RpcResult {
     bots[0].rpc_results[&id].clone()
 }
 
-#[test]
-fn shop_and_bank_resources_over_the_network() {
-    let server = RunningServer::with_example_resources();
-    let mut bots = vec![Bot::connect(server.addr, "cliente", 4000, Behavior::Idle).unwrap()];
+fn temp_db(tag: &str) -> String {
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    let path =
+        std::env::temp_dir().join(format!("hexmp-e2e-{tag}-{}-{nanos}.db", std::process::id()));
+    let _ = std::fs::remove_file(&path);
+    format!("sqlite:{}", path.display().to_string().replace('\\', "/"))
+}
+
+fn field<'a>(v: &'a ScriptValue, key: &str) -> &'a ScriptValue {
+    match v {
+        ScriptValue::Map(entries) => entries
+            .iter()
+            .find(|(k, _)| k == key)
+            .map(|(_, v)| v)
+            .unwrap_or(&ScriptValue::Nil),
+        other => panic!("esperava tabela, veio {other:?}"),
+    }
+}
+
+fn ok1(r: hexmp_headless_bot::RpcResult) -> ScriptValue {
+    match r {
+        Ok(mut v) if !v.is_empty() => v.remove(0),
+        other => panic!("rpc falhou: {other:?}"),
+    }
+}
+
+/// Conecta e espera entrar no mundo.
+fn join(server: &RunningServer, name: &str, client_id: u64) -> Vec<Bot> {
+    let mut bots = vec![Bot::connect(server.addr, name, client_id, Behavior::Idle).unwrap()];
     assert!(pump(&mut bots, Duration::from_secs(10), |b| b[0]
         .player_id
         .is_some()));
+    bots
+}
 
-    let id = bots[0].call("bank.saldo", &[]);
-    assert_eq!(wait_rpc(&mut bots, id), Ok(vec![n(1000.0)]));
+fn call(bots: &mut [Bot], name: &str, args: &[ScriptValue]) -> hexmp_headless_bot::RpcResult {
+    let id = bots[0].call(name, args);
+    wait_rpc(bots, id)
+}
 
-    let id = bots[0].call("shop.buy", &[s("agua")]);
-    assert_eq!(wait_rpc(&mut bots, id), Ok(vec![n(995.0)]));
-    assert!(pump(&mut bots, Duration::from_secs(5), |b| !b[0]
-        .events
-        .is_empty()));
+fn new_character(bots: &mut [Bot]) -> ScriptValue {
+    let data = ScriptValue::Map(vec![
+        ("firstName".into(), s("Ana")),
+        ("lastName".into(), s("Souza")),
+        ("birthdate".into(), s("1995-04-12")),
+    ]);
+    let created = ok1(call(bots, "rp.characters.create", &[data]));
+    let id = field(&created, "id").clone();
+    let selected = ok1(call(
+        bots,
+        "rp.characters.select",
+        std::slice::from_ref(&id),
+    ));
+    assert_eq!(field(&selected, "firstName"), &s("Ana"));
+    id
+}
+
+#[test]
+fn shop_over_the_network_with_rp_kit() {
+    let db = temp_db("shop");
+    let server = RunningServer::with_rp_kit(&db);
+    let mut bots = join(&server, "cliente", 4000);
+
+    // Sem personagem não compra.
     assert_eq!(
-        bots[0].events[0],
-        ("shop:comprou".to_string(), vec![s("agua"), n(995.0)])
+        call(&mut bots, "shop.buy", &[s("agua")]),
+        Err("personagem não carregado".into())
     );
+    new_character(&mut bots);
 
-    let id = bots[0].call("shop.buy", &[s("celular")]);
-    assert_eq!(wait_rpc(&mut bots, id), Err("saldo insuficiente".into()));
+    let money = ok1(call(&mut bots, "rp.money.get", &[]));
+    assert_eq!(field(&money, "cash"), &n(500.0));
 
-    let id = bots[0].call("shop.buy", &[s("foguete")]);
-    assert_eq!(wait_rpc(&mut bots, id), Err("item inválido".into()));
-
-    // O cliente não consegue mandar o preço: argumento extra é ignorado pela loja.
-    let id = bots[0].call("shop.buy", &[s("lanche"), n(0.0)]);
-    assert_eq!(wait_rpc(&mut bots, id), Ok(vec![n(980.0)]));
-
-    // Limite de 5 chamadas por 2 s: a 5ª passa, a 6ª é barrada.
-    let id = bots[0].call("shop.buy", &[s("agua")]);
-    assert_eq!(wait_rpc(&mut bots, id), Ok(vec![n(975.0)]));
-    let id = bots[0].call("shop.buy", &[s("agua")]);
     assert_eq!(
-        wait_rpc(&mut bots, id),
+        call(&mut bots, "shop.buy", &[s("agua")]),
+        Ok(vec![n(495.0)])
+    );
+    assert!(pump(&mut bots, Duration::from_secs(5), |b| b[0]
+        .events
+        .iter()
+        .any(|(name, _)| name == "shop:comprou")));
+
+    assert_eq!(
+        call(&mut bots, "shop.buy", &[s("celular")]),
+        Err("saldo insuficiente".into())
+    );
+    assert_eq!(
+        call(&mut bots, "shop.buy", &[s("foguete")]),
+        Err("item inválido".into())
+    );
+    // O cliente não consegue mandar o preço: argumento extra é ignorado pela loja.
+    assert_eq!(
+        call(&mut bots, "shop.buy", &[s("lanche"), n(0.0)]),
+        Ok(vec![n(480.0)])
+    );
+    // Limite de 5 chamadas por 2 s (a 1ª, sem personagem, também conta).
+    assert_eq!(
+        call(&mut bots, "shop.buy", &[s("agua")]),
         Err("limite de chamadas excedido, tente mais tarde".into())
     );
-
-    let id = bots[0].call("nao.existe", &[]);
+    std::thread::sleep(Duration::from_millis(2100));
     assert_eq!(
-        wait_rpc(&mut bots, id),
+        call(&mut bots, "shop.buy", &[s("agua")]),
+        Ok(vec![n(475.0)])
+    );
+
+    let inv = ok1(call(&mut bots, "rp.inventory.get", &[]));
+    assert_eq!(field(&inv, "weight"), &n(2.0 * 500.0 + 300.0));
+
+    assert_eq!(
+        call(&mut bots, "nao.existe", &[]),
         Err("rpc `nao.existe` não existe".into())
+    );
+}
+
+#[test]
+fn character_money_and_inventory_survive_restart() {
+    let db = temp_db("persist");
+    let char_id;
+    {
+        let server = RunningServer::with_rp_kit(&db);
+        let mut bots = join(&server, "persistente", 5000);
+        char_id = new_character(&mut bots);
+        assert_eq!(
+            call(&mut bots, "shop.buy", &[s("lanche")]),
+            Ok(vec![n(485.0)])
+        );
+        assert_eq!(
+            call(&mut bots, "rp.inventory.use", &[s("lanche")]),
+            Ok(vec![n(0.0)])
+        );
+        assert_eq!(
+            call(&mut bots, "shop.buy", &[s("agua")]),
+            Ok(vec![n(480.0)])
+        );
+        drop_bot(bots.pop().unwrap());
+        // `server` cai aqui: para os recursos e grava tudo antes de sair.
+    }
+
+    let server = RunningServer::with_rp_kit(&db);
+    let mut bots = join(&server, "persistente", 5001);
+    let list = ok1(call(&mut bots, "rp.characters.list", &[]));
+    let ScriptValue::Array(list) = list else {
+        panic!("lista inválida: {list:?}");
+    };
+    assert_eq!(list.len(), 1);
+    assert_eq!(field(&list[0], "id"), &char_id);
+
+    ok1(call(
+        &mut bots,
+        "rp.characters.select",
+        std::slice::from_ref(&char_id),
+    ));
+    let money = ok1(call(&mut bots, "rp.money.get", &[]));
+    assert_eq!(field(&money, "cash"), &n(480.0));
+    assert_eq!(field(&money, "bank"), &n(5000.0));
+    let inv = ok1(call(&mut bots, "rp.inventory.get", &[]));
+    assert_eq!(field(&inv, "weight"), &n(500.0));
+
+    let history = ok1(call(&mut bots, "rp.money.history", &[]));
+    let ScriptValue::Array(history) = history else {
+        panic!("extrato inválido: {history:?}");
+    };
+    assert_eq!(history.len(), 2);
+
+    // Outra conta não seleciona o personagem.
+    let mut other = join(&server, "intruso", 5002);
+    assert_eq!(
+        call(&mut other, "rp.characters.select", &[char_id]),
+        Err("personagem não encontrado".into())
     );
 }

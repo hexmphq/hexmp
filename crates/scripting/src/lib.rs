@@ -5,9 +5,11 @@
 //! - Recursos conversam por **eventos** (`events`) e **exports**; com clientes por **RPC** (`rpc`) e `net`.
 //! - O servidor alimenta o motor com jogadores e ticks, e lê os [`Command`]s gerados.
 
+mod db_api;
 pub mod manifest;
 pub mod value;
 
+use hexmp_db::{Db, Request, Ticket};
 use hexmp_protocol::{PlayerId, ScriptValue, Vec3};
 use manifest::{MANIFEST_FILE, Manifest};
 use mlua::{Function, Lua, Value, Variadic, VmState};
@@ -41,6 +43,8 @@ impl Default for EngineConfig {
 #[derive(Debug, Clone, PartialEq)]
 pub struct PlayerInfo {
     pub id: PlayerId,
+    /// Identificador estável da conta (chave para dados persistentes).
+    pub account: String,
     pub name: String,
     pub position: Vec3,
 }
@@ -63,7 +67,29 @@ pub enum Command {
         player: PlayerId,
         reason: String,
     },
+    /// Move o jogador sem validação de velocidade (spawn, admin).
+    Teleport {
+        player: PlayerId,
+        position: Vec3,
+    },
+    /// Resposta de um RPC adiado com `rpc.defer()`.
+    RpcReply {
+        player: PlayerId,
+        request: u32,
+        result: Result<Vec<ScriptValue>, String>,
+    },
 }
+
+/// Resultado de [`ScriptEngine::call_rpc_deferrable`].
+#[derive(Debug, Clone, PartialEq)]
+pub enum RpcOutcome {
+    Done(Result<Vec<ScriptValue>, String>),
+    /// O handler chamou `rpc.defer()`; a resposta virá como [`Command::RpcReply`].
+    Deferred,
+}
+
+/// Tempo máximo para um RPC adiado responder.
+pub const RPC_DEFER_TIMEOUT: Duration = Duration::from_secs(10);
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 struct RateLimit {
@@ -120,6 +146,19 @@ struct Shared {
     timers: RefCell<Vec<Timer>>,
     next_timer: Cell<u64>,
     script_errors: Cell<u64>,
+    db: RefCell<Option<Db>>,
+    /// Requisições ao banco aguardando resposta, com o callback do script.
+    pending: RefCell<HashMap<Ticket, Pending>>,
+    /// RPC em execução agora (para `rpc.defer`).
+    current_rpc: Cell<Option<(PlayerId, u32)>>,
+    deferred_now: Cell<bool>,
+    /// RPCs adiados aguardando resposta → prazo (relógio do motor).
+    deferred: RefCell<HashMap<(PlayerId, u32), Duration>>,
+}
+
+struct Pending {
+    resource: Rc<str>,
+    callback: Option<Handler>,
 }
 
 impl Shared {
@@ -166,6 +205,10 @@ impl Shared {
         self.timers
             .borrow_mut()
             .retain(|t| &*t.handler.resource != resource);
+        // Respostas de banco deste recurso são descartadas; as escritas em si continuam.
+        self.pending
+            .borrow_mut()
+            .retain(|_, p| &*p.resource != resource);
     }
 }
 
@@ -233,7 +276,8 @@ impl std::fmt::Display for StartError {
 impl std::error::Error for StartError {}
 
 pub struct ScriptEngine {
-    root: PathBuf,
+    /// Pastas de recursos, em ordem de prioridade.
+    roots: Vec<PathBuf>,
     shared: Rc<Shared>,
     /// Na ordem em que foram iniciados.
     running: Vec<Resource>,
@@ -243,7 +287,7 @@ pub struct ScriptEngine {
 impl ScriptEngine {
     pub fn new(root: impl Into<PathBuf>, config: EngineConfig) -> Self {
         Self {
-            root: root.into(),
+            roots: vec![root.into()],
             shared: Rc::new(Shared {
                 config,
                 deadline: Cell::new(Instant::now()),
@@ -257,26 +301,54 @@ impl ScriptEngine {
                 timers: RefCell::new(Vec::new()),
                 next_timer: Cell::new(1),
                 script_errors: Cell::new(0),
+                db: RefCell::new(None),
+                pending: RefCell::new(HashMap::new()),
+                current_rpc: Cell::new(None),
+                deferred_now: Cell::new(false),
+                deferred: RefCell::new(HashMap::new()),
             }),
             running: Vec::new(),
             rate_state: HashMap::new(),
         }
     }
 
-    pub fn root(&self) -> &Path {
-        &self.root
+    /// Adiciona outra pasta de recursos (ex.: `rp-kit`). Em nomes repetidos vale a primeira.
+    pub fn add_root(&mut self, root: impl Into<PathBuf>) {
+        self.roots.push(root.into());
+    }
+
+    pub fn roots(&self) -> &[PathBuf] {
+        &self.roots
+    }
+
+    /// Liga o banco. Necessário para recursos com `migrations` ou que usam `db`.
+    pub fn with_db(self, db: Db) -> Self {
+        *self.shared.db.borrow_mut() = Some(db);
+        self
+    }
+
+    pub fn has_db(&self) -> bool {
+        self.shared.db.borrow().is_some()
+    }
+
+    fn resolve(&self, name: &str) -> Option<PathBuf> {
+        self.roots
+            .iter()
+            .map(|r| r.join(name))
+            .find(|d| d.join(MANIFEST_FILE).is_file())
     }
 
     /// Recursos disponíveis na pasta (subpastas com `resource.luau`), em ordem alfabética.
     pub fn available(&self) -> Vec<String> {
-        let mut names: Vec<String> = std::fs::read_dir(&self.root)
-            .into_iter()
-            .flatten()
-            .flatten()
+        let mut names: Vec<String> = self
+            .roots
+            .iter()
+            .flat_map(|root| std::fs::read_dir(root).into_iter().flatten().flatten())
             .filter(|e| e.path().join(MANIFEST_FILE).is_file())
             .filter_map(|e| e.file_name().into_string().ok())
             .collect();
         names.sort();
+        names.dedup();
         names
     }
 
@@ -324,16 +396,16 @@ impl ScriptEngine {
         if !visiting.insert(name.to_string()) {
             return Err(StartError::DependencyCycle(name.into()));
         }
-        let dir = self.root.join(name);
+        let dir = self
+            .resolve(name)
+            .ok_or_else(|| StartError::NotFound(name.into()))?;
         let source = std::fs::read_to_string(dir.join(MANIFEST_FILE))
             .map_err(|_| StartError::NotFound(name.into()))?;
         let manifest = manifest::parse(&source, &format!("{name}/{MANIFEST_FILE}"))
             .map_err(|e| StartError::Manifest(name.into(), e))?;
 
         for dep in &manifest.dependencies {
-            if !manifest::is_safe_relative(dep)
-                || !self.root.join(dep).join(MANIFEST_FILE).is_file()
-            {
+            if !manifest::is_safe_relative(dep) || self.resolve(dep).is_none() {
                 return Err(StartError::MissingDependency(name.into(), dep.clone()));
             }
             self.start_inner(dep, visiting)?;
@@ -368,6 +440,7 @@ impl ScriptEngine {
         });
         install_api(&lua, &rname, &self.shared).map_err(fail)?;
         lua.sandbox(true).map_err(fail)?;
+        self.run_migrations(name, &dir, &manifest)?;
 
         let scripts = manifest
             .shared_scripts
@@ -395,6 +468,36 @@ impl ScriptEngine {
             _lua: lua,
             fingerprint: fp,
         })
+    }
+
+    fn run_migrations(
+        &self,
+        name: &str,
+        dir: &Path,
+        manifest: &Manifest,
+    ) -> Result<(), StartError> {
+        if manifest.migrations.is_empty() {
+            return Ok(());
+        }
+        let mut files = Vec::with_capacity(manifest.migrations.len());
+        for file in &manifest.migrations {
+            let sql = std::fs::read_to_string(dir.join(file))
+                .map_err(|e| StartError::Script(name.into(), format!("{file}: {e}")))?;
+            files.push((file.clone(), sql));
+        }
+        let mut db = self.shared.db.borrow_mut();
+        let Some(db) = db.as_mut() else {
+            return Err(StartError::Script(
+                name.into(),
+                "tem migrations mas o servidor está sem banco (use --db)".into(),
+            ));
+        };
+        db.call(Request::Migrate {
+            resource: name.into(),
+            files,
+        })
+        .map(|_| ())
+        .map_err(|e| StartError::Script(name.into(), format!("migração: {e}")))
     }
 
     /// Para o recurso. Dependentes **não** são parados (como no FiveM); todos recebem `resourceStop`.
@@ -460,6 +563,10 @@ impl ScriptEngine {
     pub fn player_left(&mut self, id: PlayerId, reason: &str) {
         let info = self.shared.players.borrow_mut().remove(&id);
         self.rate_state.retain(|(p, _), _| *p != id);
+        self.shared
+            .deferred
+            .borrow_mut()
+            .retain(|(p, _), _| *p != id);
         if let Some(info) = info {
             self.emit(
                 "playerDropped",
@@ -474,8 +581,48 @@ impl ScriptEngine {
         }
     }
 
-    /// Chamada de RPC vinda de um cliente. O handler recebe `(player, ...args)`.
+    /// RPC que precisa de resposta imediata (testes, chamadas internas).
+    /// Um handler que usa `rpc.defer()` aqui recebe erro.
     pub fn call_rpc(
+        &mut self,
+        player: PlayerId,
+        name: &str,
+        args: &[ScriptValue],
+    ) -> Result<Vec<ScriptValue>, String> {
+        match self.call_rpc_deferrable(player, 0, name, args) {
+            RpcOutcome::Done(r) => r,
+            RpcOutcome::Deferred => {
+                self.shared.deferred.borrow_mut().remove(&(player, 0));
+                Err("rpc adiado não suportado nesta chamada".into())
+            }
+        }
+    }
+
+    /// Chamada de RPC vinda de um cliente (`request` é o id da requisição dele).
+    /// O handler recebe `(player, ...args)` e pode responder na hora ou adiar com `rpc.defer()`.
+    pub fn call_rpc_deferrable(
+        &mut self,
+        player: PlayerId,
+        request: u32,
+        name: &str,
+        args: &[ScriptValue],
+    ) -> RpcOutcome {
+        self.shared.current_rpc.set(Some((player, request)));
+        self.shared.deferred_now.set(false);
+        let result = self.call_rpc_inner(player, name, args);
+        self.shared.current_rpc.set(None);
+        if self.shared.deferred_now.replace(false) {
+            if let Err(e) = result {
+                // Erro depois de adiar: responde o erro agora.
+                self.shared.deferred.borrow_mut().remove(&(player, request));
+                return RpcOutcome::Done(Err(e));
+            }
+            return RpcOutcome::Deferred;
+        }
+        RpcOutcome::Done(result)
+    }
+
+    fn call_rpc_inner(
         &mut self,
         player: PlayerId,
         name: &str,
@@ -527,6 +674,8 @@ impl ScriptEngine {
     pub fn tick(&mut self, dt: Duration) {
         let now = self.shared.clock.get() + dt;
         self.shared.clock.set(now);
+        self.deliver_db_results();
+        self.expire_deferred(now);
 
         let due: Vec<u64> = self
             .shared
@@ -561,6 +710,74 @@ impl ScriptEngine {
         }
     }
 
+    fn expire_deferred(&mut self, now: Duration) {
+        let expired: Vec<(PlayerId, u32)> = self
+            .shared
+            .deferred
+            .borrow()
+            .iter()
+            .filter(|(_, deadline)| **deadline <= now)
+            .map(|(k, _)| *k)
+            .collect();
+        for (player, request) in expired {
+            self.shared.deferred.borrow_mut().remove(&(player, request));
+            self.shared.outbox.borrow_mut().push(Command::RpcReply {
+                player,
+                request,
+                result: Err("tempo esgotado".into()),
+            });
+        }
+    }
+
+    /// Entrega respostas do banco aos callbacks dos scripts.
+    fn deliver_db_results(&mut self) {
+        let results = match self.shared.db.borrow_mut().as_mut() {
+            Some(db) => db.poll(),
+            None => return,
+        };
+        for (ticket, result) in results {
+            let pending = self.shared.pending.borrow_mut().remove(&ticket);
+            let Some(Pending { resource, callback }) = pending else {
+                continue; // recurso parado: resposta descartada
+            };
+            let Some(h) = callback else {
+                if let Err(e) = &result {
+                    self.shared
+                        .script_errors
+                        .set(self.shared.script_errors.get() + 1);
+                    tracing::error!(target: "script", resource = &*resource, "banco: {e}");
+                }
+                continue;
+            };
+            self.arm_deadline();
+            let call =
+                db_api::result_to_lua(&h.lua, &result).and_then(|args| h.func.call::<()>(args));
+            if let Err(e) = call {
+                self.shared.report(&resource, "callback do banco", &e);
+            }
+        }
+    }
+
+    /// Espera todas as respostas pendentes do banco e entrega aos callbacks.
+    /// Para testes e desligamento; nunca no tick.
+    pub fn flush_db(&mut self) {
+        while !self.shared.pending.borrow().is_empty() {
+            self.deliver_db_results();
+            std::thread::sleep(Duration::from_millis(1));
+        }
+    }
+
+    /// Para todos os recursos (do último ao primeiro) e espera o banco gravar tudo que ficou na fila.
+    pub fn shutdown(&mut self) {
+        for name in self.running().into_iter().rev() {
+            self.stop(&name);
+        }
+        let db = self.shared.db.borrow_mut().take();
+        if let Some(mut db) = db {
+            db.shutdown();
+        }
+    }
+
     pub fn drain_commands(&mut self) -> Vec<Command> {
         std::mem::take(&mut *self.shared.outbox.borrow_mut())
     }
@@ -577,6 +794,7 @@ impl Drop for ScriptEngine {
 fn player_value(p: &PlayerInfo) -> ScriptValue {
     ScriptValue::Map(vec![
         ("id".into(), ScriptValue::Number(p.id as f64)),
+        ("account".into(), ScriptValue::String(p.account.clone())),
         ("name".into(), ScriptValue::String(p.name.clone())),
         (
             "position".into(),
@@ -587,6 +805,17 @@ fn player_value(p: &PlayerInfo) -> ScriptValue {
             ]),
         ),
     ])
+}
+
+/// Responde um RPC adiado uma única vez; respostas repetidas ou atrasadas são ignoradas.
+fn finish_deferred(s: &Shared, key: (PlayerId, u32), result: Result<Vec<ScriptValue>, String>) {
+    if s.deferred.borrow_mut().remove(&key).is_some() {
+        s.outbox.borrow_mut().push(Command::RpcReply {
+            player: key.0,
+            request: key.1,
+            result,
+        });
+    }
 }
 
 fn upgrade(w: &Weak<Shared>) -> mlua::Result<Rc<Shared>> {
@@ -725,6 +954,41 @@ fn install_api(lua: &Lua, resource: &Rc<str>, shared: &Rc<Shared>) -> mlua::Resu
             },
         )?,
     )?;
+    let w = Rc::downgrade(shared);
+    rpc.set(
+        "defer",
+        lua.create_function(move |lua, ()| {
+            let s = upgrade(&w)?;
+            let Some(key) = s.current_rpc.get() else {
+                return Err(rt("rpc.defer() só pode ser chamado dentro de um rpc"));
+            };
+            if !s.deferred_now.replace(true) {
+                let deadline = s.clock.get() + RPC_DEFER_TIMEOUT;
+                s.deferred.borrow_mut().insert(key, deadline);
+            }
+            let reply = lua.create_table()?;
+            let w1 = Rc::downgrade(&s);
+            reply.set(
+                "ok",
+                lua.create_function(move |_, args: Variadic<Value>| {
+                    let s = upgrade(&w1)?;
+                    let result = args_to_script(&args).map_err(rt)?;
+                    finish_deferred(&s, key, Ok(result));
+                    Ok(())
+                })?,
+            )?;
+            let w2 = Rc::downgrade(&s);
+            reply.set(
+                "fail",
+                lua.create_function(move |_, msg: String| {
+                    let s = upgrade(&w2)?;
+                    finish_deferred(&s, key, Err(msg));
+                    Ok(())
+                })?,
+            )?;
+            Ok(reply)
+        })?,
+    )?;
     g.set("rpc", rpc)?;
 
     // timer
@@ -799,6 +1063,22 @@ fn install_api(lua: &Lua, resource: &Rc<str>, shared: &Rc<Shared>) -> mlua::Resu
             Ok(())
         })?,
     )?;
+    let w = Rc::downgrade(shared);
+    players.set(
+        "setPosition",
+        lua.create_function(move |_, (id, pos): (PlayerId, mlua::Table)| {
+            let s = upgrade(&w)?;
+            let position = Vec3::new(pos.get("x")?, pos.get("y")?, pos.get("z")?);
+            if !position.is_finite() {
+                return Err(rt("posição inválida"));
+            }
+            s.outbox.borrow_mut().push(Command::Teleport {
+                player: id,
+                position,
+            });
+            Ok(())
+        })?,
+    )?;
     g.set("players", players)?;
 
     // net
@@ -834,6 +1114,7 @@ fn install_api(lua: &Lua, resource: &Rc<str>, shared: &Rc<Shared>) -> mlua::Resu
         })?,
     )?;
     g.set("net", net)?;
+    db_api::install(lua, resource, shared)?;
     Ok(())
 }
 

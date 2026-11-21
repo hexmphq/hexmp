@@ -19,6 +19,25 @@ impl Fixture {
         Self { root }
     }
 
+    /// Recurso com migração SQL e `main.luau`.
+    fn resource_with_sql(&self, name: &str, sql: &str, code: &str) -> &Self {
+        let dir = self.root.join(name);
+        std::fs::create_dir_all(dir.join("sql")).unwrap();
+        std::fs::write(
+            dir.join(MANIFEST_FILE),
+            "migrations = { \"sql/001.sql\" }\nserver_scripts = { \"main.luau\" }\n",
+        )
+        .unwrap();
+        std::fs::write(dir.join("sql/001.sql"), sql).unwrap();
+        std::fs::write(dir.join("main.luau"), code).unwrap();
+        self
+    }
+
+    fn engine_with_db(&self) -> ScriptEngine {
+        ScriptEngine::new(&self.root, EngineConfig::default())
+            .with_db(Db::connect("sqlite::memory:").unwrap())
+    }
+
     /// Cria um recurso com `main.luau` e dependências opcionais.
     fn resource(&self, name: &str, deps: &[&str], code: &str) -> &Self {
         let dir = self.root.join(name);
@@ -50,6 +69,7 @@ impl Drop for Fixture {
 fn ana() -> PlayerInfo {
     PlayerInfo {
         id: 1,
+        account: "dev:ana".into(),
         name: "ana".into(),
         position: Vec3::ZERO,
     }
@@ -362,6 +382,7 @@ fn players_api_and_drop_event() {
     e.player_joined(ana());
     e.player_joined(PlayerInfo {
         id: 2,
+        account: "dev:bia".into(),
         name: "bia".into(),
         position: Vec3::ZERO,
     });
@@ -454,4 +475,251 @@ fn rate_limit_parsing() {
     for bad in ["", "5", "0/1s", "5/s", "5/10h", "x/1s"] {
         assert!(parse_rate_limit(bad).is_none(), "{bad}");
     }
+}
+
+#[test]
+fn migrations_and_queries_from_scripts() {
+    let f = Fixture::new();
+    f.resource_with_sql(
+        "notas",
+        "CREATE TABLE notas (id TEXT PRIMARY KEY, texto TEXT NOT NULL, criado BIGINT NOT NULL);",
+        r#"
+        ultimo = nil
+        rpc.define("salvar", function(player, texto)
+            local id = util.uuid()
+            db.execute("INSERT INTO notas (id, texto, criado) VALUES ($1, $2, $3)", { id, texto, util.now() })
+            return id
+        end)
+        rpc.define("ler", function()
+            db.query("SELECT texto FROM notas ORDER BY criado", function(rows, err)
+                ultimo = err or rows
+            end)
+        end)
+        rpc.define("ultimo", function() return ultimo end)
+        "#,
+    );
+    let mut e = f.engine_with_db();
+    e.start("notas").unwrap();
+    e.player_joined(ana());
+    let id = e.call_rpc(1, "salvar", &[s("oi")]).unwrap();
+    assert!(matches!(&id[0], ScriptValue::String(u) if u.len() == 36));
+    e.call_rpc(1, "salvar", &[s("tchau")]).unwrap();
+    e.call_rpc(1, "ler", &[]).unwrap();
+    e.flush_db();
+    assert_eq!(
+        e.call_rpc(1, "ultimo", &[]),
+        Ok(vec![ScriptValue::Array(vec![
+            ScriptValue::Map(vec![("texto".into(), s("oi"))]),
+            ScriptValue::Map(vec![("texto".into(), s("tchau"))]),
+        ])])
+    );
+
+    // Reiniciar não reaplica a migração.
+    e.restart("notas").unwrap();
+}
+
+#[test]
+fn transaction_from_script_is_all_or_nothing() {
+    let f = Fixture::new();
+    f.resource_with_sql(
+        "banco",
+        "CREATE TABLE contas (id TEXT PRIMARY KEY, saldo BIGINT NOT NULL);
+         INSERT INTO contas VALUES ('a', 100), ('b', 0);",
+        r#"
+        resultado = nil
+        local function transferir(valor)
+            db.transaction({
+                { "UPDATE contas SET saldo = saldo - $1 WHERE id = 'a' AND saldo >= $1", { valor }, expect = 1 },
+                { sql = "UPDATE contas SET saldo = saldo + $1 WHERE id = 'b'", params = { valor }, expect = 1 },
+            }, function(r, err) resultado = err or "ok" end)
+        end
+        rpc.define("transferir", function(_, v) transferir(v) end)
+        rpc.define("resultado", function() return resultado end)
+        rpc.define("saldos", function()
+            db.query("SELECT id, saldo FROM contas ORDER BY id", function(rows) resultado = rows end)
+        end)
+        "#,
+    );
+    let mut e = f.engine_with_db();
+    e.start("banco").unwrap();
+    e.player_joined(ana());
+
+    e.call_rpc(1, "transferir", &[n(70.0)]).unwrap();
+    e.flush_db();
+    assert_eq!(e.call_rpc(1, "resultado", &[]), Ok(vec![s("ok")]));
+
+    e.call_rpc(1, "transferir", &[n(70.0)]).unwrap();
+    e.flush_db();
+    let err = e.call_rpc(1, "resultado", &[]).unwrap();
+    assert!(
+        matches!(&err[0], ScriptValue::String(m) if m.contains("esperava 1")),
+        "{err:?}"
+    );
+
+    e.call_rpc(1, "saldos", &[]).unwrap();
+    e.flush_db();
+    assert_eq!(
+        e.call_rpc(1, "resultado", &[]),
+        Ok(vec![ScriptValue::Array(vec![
+            ScriptValue::Map(vec![("id".into(), s("a")), ("saldo".into(), n(30.0))]),
+            ScriptValue::Map(vec![("id".into(), s("b")), ("saldo".into(), n(70.0))]),
+        ])])
+    );
+}
+
+#[test]
+fn db_without_server_db_is_a_clear_error() {
+    let f = Fixture::new();
+    f.resource(
+        "x",
+        &[],
+        "rpc.define('q', function() db.query('SELECT 1') end)",
+    )
+    .resource_with_sql("y", "CREATE TABLE y (a TEXT);", "");
+    let mut e = f.engine();
+    e.start("x").unwrap();
+    e.player_joined(ana());
+    let err = e.call_rpc(1, "q", &[]).unwrap_err();
+    assert!(err.contains("banco de dados não configurado"), "{err}");
+    let err = e.start("y").unwrap_err().to_string();
+    assert!(err.contains("--db"), "{err}");
+}
+
+#[test]
+fn shutdown_runs_stop_handlers_and_flushes_writes() {
+    let path = std::env::temp_dir().join(format!(
+        "hexmp-scripting-shutdown-{}.db",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_file(&path);
+    let url = format!("sqlite:{}", path.display().to_string().replace('\\', "/"));
+    let f = Fixture::new();
+    f.resource_with_sql(
+        "salva",
+        "CREATE TABLE log (msg TEXT);",
+        r#"
+        events.on("resourceStop", function(nome)
+            if nome == RESOURCE_NAME then
+                db.execute("INSERT INTO log (msg) VALUES ($1)", { "parando" })
+            end
+        end)
+        "#,
+    );
+    let mut e =
+        ScriptEngine::new(&f.root, EngineConfig::default()).with_db(Db::connect(&url).unwrap());
+    e.start("salva").unwrap();
+    e.shutdown();
+    assert!(e.running().is_empty());
+
+    let mut db = Db::connect(&url).unwrap();
+    let r = db
+        .call(Request::Run(hexmp_db::Statement::new(
+            "SELECT msg FROM log",
+            vec![],
+        )))
+        .unwrap();
+    assert_eq!(
+        r,
+        hexmp_db::Response::Rows(vec![ScriptValue::Map(vec![("msg".into(), s("parando"))])])
+    );
+    drop(db);
+    let _ = std::fs::remove_file(path);
+}
+
+#[test]
+fn multiple_roots_and_teleport() {
+    let a = Fixture::new();
+    let b = Fixture::new();
+    a.resource(
+        "local",
+        &["kit"],
+        "rpc.define('tp', function(p) players.setPosition(p.id, { x = 1, y = 2, z = 3 }) end)",
+    );
+    b.resource("kit", &[], "");
+    let mut e = a.engine();
+    e.add_root(&b.root);
+    assert_eq!(e.available(), vec!["kit", "local"]);
+    e.start("local").unwrap();
+    e.player_joined(ana());
+    e.call_rpc(1, "tp", &[]).unwrap();
+    assert_eq!(
+        e.drain_commands(),
+        vec![Command::Teleport {
+            player: 1,
+            position: Vec3::new(1.0, 2.0, 3.0)
+        }]
+    );
+}
+
+#[test]
+fn deferred_rpc_replies_later_once() {
+    let f = Fixture::new();
+    f.resource(
+        "d",
+        &[],
+        r#"
+        local guardado
+        rpc.define("lento", function(player, x)
+            guardado = rpc.defer()
+            timer.after(100, function()
+                guardado.ok(x * 2)
+                guardado.ok(999) -- ignorado
+            end)
+        end)
+        rpc.define("nunca", function() rpc.defer() end)
+        rpc.define("falha", function() local r = rpc.defer() r.fail("sem estoque") end)
+        rpc.define("fora", function() return 1 end)
+        timer.after(0, function() pcall(rpc.defer) end)
+        "#,
+    );
+    let mut e = f.engine();
+    e.start("d").unwrap();
+    e.player_joined(ana());
+
+    assert_eq!(
+        e.call_rpc_deferrable(1, 7, "lento", &[n(21.0)]),
+        RpcOutcome::Deferred
+    );
+    e.tick(Duration::from_millis(50));
+    assert!(e.drain_commands().is_empty());
+    e.tick(Duration::from_millis(60));
+    assert_eq!(
+        e.drain_commands(),
+        vec![Command::RpcReply {
+            player: 1,
+            request: 7,
+            result: Ok(vec![n(42.0)])
+        }]
+    );
+
+    assert_eq!(
+        e.call_rpc_deferrable(1, 8, "falha", &[]),
+        RpcOutcome::Deferred
+    );
+    assert_eq!(
+        e.drain_commands(),
+        vec![Command::RpcReply {
+            player: 1,
+            request: 8,
+            result: Err("sem estoque".into())
+        }]
+    );
+
+    assert_eq!(
+        e.call_rpc_deferrable(1, 9, "nunca", &[]),
+        RpcOutcome::Deferred
+    );
+    e.tick(RPC_DEFER_TIMEOUT);
+    assert_eq!(
+        e.drain_commands(),
+        vec![Command::RpcReply {
+            player: 1,
+            request: 9,
+            result: Err("tempo esgotado".into())
+        }]
+    );
+    assert_eq!(
+        e.call_rpc_deferrable(1, 10, "fora", &[]),
+        RpcOutcome::Done(Ok(vec![n(1.0)]))
+    );
 }
