@@ -281,6 +281,10 @@ fn example_server_from_character_to_payday() {
         .iter()
         .any(|m| ui_type(m) == Some("points"))));
     while c.take_correction().is_some() {}
+    let seen = c.runtime.take_markers().unwrap();
+    for label in ["Loja", "Depósito"] {
+        assert!(seen.iter().any(|m| m.label == label), "{label}: {seen:?}");
+    }
 
     // Loja: a dica aparece perto, e E abre.
     let mut at = Vec3::ZERO;

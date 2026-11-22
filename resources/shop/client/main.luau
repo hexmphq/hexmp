@@ -6,6 +6,11 @@ local open = false
 local function point()
     local value = if playing then { label = "Loja", position = Loja.posicao } else nil
     events.emit("hud:point", "shop", value)
+    if playing then
+        markers.set("shop", { label = "Loja", position = Loja.posicao, radius = Loja.alcance })
+    else
+        markers.remove("shop")
+    end
 end
 
 local function prompt()
@@ -45,15 +50,12 @@ if me.id() then
     end)
 end
 
-timer.every(200, function()
-    local now = Perto(me.position())
-    if now ~= near then
-        near = now
-        if open and not near then
-            setOpen(false)
-        end
-        prompt()
+zones.set("shop", { position = Loja.posicao, radius = Loja.alcance }, function(inside)
+    near = inside
+    if open and not near then
+        setOpen(false)
     end
+    prompt()
 end)
 
 keys.bind("open", "E", "Abrir a loja", function(down)

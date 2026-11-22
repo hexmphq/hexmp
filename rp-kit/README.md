@@ -65,7 +65,7 @@ Para o `rp-hud` (`events.emit`, entre recursos do cliente):
 |---|---|
 | `hud:notify` | `texto, "ok" \| "erro"?` |
 | `hud:prompt` | `RESOURCE_NAME, texto` (ou `nil` para tirar) |
-| `hud:point` | `id, {label, position}` (ou `nil` para tirar) |
+| `hud:point` | `id, {label, position}` (ou `nil` para tirar); a seta aponta a partir da câmera |
 
 O `rp-hud` emite `hud:ready` quando reinicia: mande de novo o que estiver valendo.
 

@@ -332,3 +332,100 @@ fn player_can_block_ui_focus() {
     rt.set_ui_focus(Some("preso"));
     assert!(rt.ui_focus().is_some());
 }
+
+#[test]
+fn markers_zones_and_camera() {
+    let mut rt = ClientRuntime::default();
+    assert!(rt.take_markers().is_none());
+    let code = r##"
+        markers.set("loja", { position = { x = 5, y = 0, z = 0 }, radius = 2, color = "#ff8000", label = "Loja" })
+        zones.set("loja", { position = { x = 5, y = 0, z = 0 }, radius = 2 }, function(inside)
+            ui.send(inside)
+        end)
+        events.on("tirar", function() ui.send(markers.remove("loja")) end)
+        events.on("olhar", function() ui.send(camera.heading()) end)"##;
+    start(&mut rt, "loja", code);
+    let m = rt.take_markers().unwrap();
+    assert_eq!(m.len(), 1);
+    assert_eq!(
+        (m[0].color, &*m[0].label, m[0].radius),
+        ([255, 128, 0], "Loja", 2.0)
+    );
+    assert!(rt.take_markers().is_none(), "só quando muda");
+
+    let out = |rt: &mut ClientRuntime| -> Vec<ScriptValue> {
+        rt.drain_ui().into_iter().map(|m| m.data).collect()
+    };
+    let (yes, no) = (ScriptValue::Bool(true), ScriptValue::Bool(false));
+    let tick = |rt: &mut ClientRuntime| rt.tick(Duration::ZERO);
+    tick(&mut rt);
+    assert!(out(&mut rt).is_empty(), "fora do mundo não há área");
+    rt.handle(&ServerMessage::Welcome {
+        player_id: 1,
+        tick_rate: 30,
+        spawn: Vec3::ZERO,
+    });
+    tick(&mut rt);
+    assert_eq!(out(&mut rt), [no.clone()], "a primeira conferência avisa");
+    rt.set_local_position(Vec3::new(4.0, 0.0, 0.0));
+    tick(&mut rt);
+    tick(&mut rt);
+    assert_eq!(out(&mut rt), [yes.clone()]);
+    rt.set_local_position(Vec3::ZERO);
+    tick(&mut rt);
+    assert_eq!(out(&mut rt), [no]);
+
+    rt.set_camera_heading(-90.0);
+    rt.set_camera_heading(f32::NAN);
+    rt.emit("olhar", &[]);
+    assert_eq!(out(&mut rt), [ScriptValue::Number(270.0)]);
+
+    rt.emit("tirar", &[]);
+    assert_eq!(out(&mut rt), [yes]);
+    assert_eq!(rt.take_markers(), Some(vec![]));
+
+    // Recusas não deixam nada para trás; parar o recurso limpa.
+    for bad in [
+        r#"markers.set("x", { position = { x = 0/0, y = 0, z = 0 } })"#,
+        r#"markers.set("x", { position = { x = 0, y = 0, z = 0 }, radius = 0 })"#,
+        r#"markers.set("x", { position = { x = 0, y = 0, z = 0 }, color = "azul" })"#,
+        r#"markers.set("", { position = { x = 0, y = 0, z = 0 } })"#,
+        r#"for i = 1, 65 do markers.set("x" .. i, { position = { x = 0, y = 0, z = 0 } }) end"#,
+        r#"for i = 1, 65 do zones.set("x" .. i, { position = { x = 0, y = 0, z = 0 } }, function() end) end"#,
+    ] {
+        start(&mut rt, "mau", bad);
+    }
+    assert_eq!(rt.running(), ["loja"]);
+    assert_eq!(rt.take_markers(), Some(vec![]));
+    start(&mut rt, "loja", code);
+    assert_eq!(rt.take_markers().unwrap().len(), 1);
+    rt.stop_all();
+    assert_eq!(rt.take_markers(), Some(vec![]));
+    tick(&mut rt);
+    assert!(out(&mut rt).is_empty());
+}
+
+#[test]
+fn zone_replaced_inside_its_own_handler() {
+    let mut rt = ClientRuntime::default();
+    start(
+        &mut rt,
+        "a",
+        r#"local at = { position = { x = 0, y = 0, z = 0 } }
+           zones.set("a", at, function()
+               zones.remove("b")
+               zones.set("a", at, function(inside) ui.send(inside) end)
+           end)
+           zones.set("b", at, function() ui.send("b") end)"#,
+    );
+    rt.handle(&ServerMessage::Welcome {
+        player_id: 1,
+        tick_rate: 30,
+        spawn: Vec3::ZERO,
+    });
+    for _ in 0..3 {
+        rt.tick(Duration::ZERO);
+    }
+    let ui: Vec<_> = rt.drain_ui().into_iter().map(|m| m.data).collect();
+    assert_eq!(ui, [ScriptValue::Bool(true)]);
+}

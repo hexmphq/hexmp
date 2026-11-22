@@ -35,8 +35,8 @@ local function showPoints()
             id = id,
             label = p.label,
             distance = math.floor(math.sqrt(dx * dx + dy * dy) + 0.5),
-            -- Graus a partir do norte, no sentido horário.
-            heading = math.floor(math.deg(math.atan2(dx, dy))),
+            -- Em relação à câmera, no sentido horário: 0 = em frente.
+            heading = math.floor(math.deg(math.atan2(dx, dy)) - camera.heading()) % 360,
         })
     end
     table.sort(list, function(a, b)
@@ -138,7 +138,7 @@ events.on("resourceStop", function(name)
     prompts[name] = nil
     showPrompts()
 end)
-timer.every(250, function()
+timer.every(100, function()
     if playing and next(points) ~= nil then
         showPoints()
     end

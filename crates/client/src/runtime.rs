@@ -72,6 +72,36 @@ pub struct CustomKey {
     pub key: String,
 }
 
+/// Por recurso.
+const MAX_MARKERS: usize = 64;
+const MAX_ZONES: usize = 64;
+const MAX_ID: usize = 64;
+const MAX_LABEL: usize = 64;
+const MAX_RADIUS: f32 = 1000.0;
+const DEFAULT_COLOR: [u8; 3] = [0x40, 0xDA, 0xFF];
+
+/// Marcador no mundo, desenhado pelo host.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Marker {
+    pub resource: String,
+    pub id: String,
+    /// Centro, no chão.
+    pub position: Vec3,
+    pub radius: f32,
+    pub color: [u8; 3],
+    pub label: String,
+}
+
+/// Área esférica que avisa quando o jogador local entra e sai.
+struct Zone {
+    id: String,
+    position: Vec3,
+    radius: f32,
+    /// `None`: ainda não conferida; a primeira conferência sempre avisa.
+    inside: Option<bool>,
+    handler: Rc<Handler>,
+}
+
 struct Binding {
     id: String,
     label: String,
@@ -103,6 +133,7 @@ struct PendingRpc {
 struct Me {
     id: Option<PlayerId>,
     position: Vec3,
+    camera: f32,
 }
 
 struct Shared {
@@ -126,6 +157,9 @@ struct Shared {
     /// Trocas feitas pelo jogador: (recurso, id) → tecla. Sobrevivem ao reinício do recurso.
     custom_keys: RefCell<HashMap<(String, String), u32>>,
     held: RefCell<HashSet<u32>>,
+    markers: RefCell<BTreeMap<(String, String), Marker>>,
+    markers_changed: Cell<bool>,
+    zones: RefCell<Vec<Zone>>,
     me: RefCell<Me>,
     players: RefCell<BTreeMap<PlayerId, String>>,
     errors: Cell<u64>,
@@ -179,6 +213,11 @@ impl Shared {
         self.bindings
             .borrow_mut()
             .retain(|b| &*b.handler.resource != resource);
+        self.markers.borrow_mut().retain(|(r, _), _| r != resource);
+        self.markers_changed.set(true);
+        self.zones
+            .borrow_mut()
+            .retain(|z| &*z.handler.resource != resource);
         self.ui_focus.borrow_mut().retain(|r| &**r != resource);
         self.ui_handlers
             .borrow_mut()
@@ -235,6 +274,9 @@ impl ClientRuntime {
                 bindings: RefCell::default(),
                 custom_keys: RefCell::default(),
                 held: RefCell::default(),
+                markers: RefCell::default(),
+                markers_changed: Cell::new(false),
+                zones: RefCell::default(),
                 me: RefCell::default(),
                 players: RefCell::default(),
                 errors: Cell::new(0),
@@ -263,6 +305,21 @@ impl ClientRuntime {
     /// O host informa a posição do jogador local (vem do jogo).
     pub fn set_local_position(&mut self, position: Vec3) {
         self.shared.me.borrow_mut().position = position;
+    }
+
+    /// O host informa para onde a câmera aponta: graus, 0 = norte (+y), sentido horário.
+    pub fn set_camera_heading(&mut self, heading: f32) {
+        if heading.is_finite() {
+            self.shared.me.borrow_mut().camera = heading.rem_euclid(360.0);
+        }
+    }
+
+    /// Todos os marcadores, se algo mudou desde a última chamada.
+    pub fn take_markers(&mut self) -> Option<Vec<Marker>> {
+        self.shared
+            .markers_changed
+            .take()
+            .then(|| self.shared.markers.borrow().values().cloned().collect())
     }
 
     /// Dispara um evento local para os scripts (ex.: vindo do jogo).
@@ -362,6 +419,7 @@ impl ClientRuntime {
             ids.iter().filter_map(|id| rpcs.remove(id)).collect()
         };
         self.sync_keys();
+        self.check_zones();
         for p in expired {
             if let Some(h) = p.handler {
                 s.call(
@@ -369,6 +427,32 @@ impl ClientRuntime {
                     "resposta de rpc",
                     &[ScriptValue::String("tempo esgotado".into())],
                 );
+            }
+        }
+    }
+
+    /// Avisa as áreas em que o jogador entrou ou de que saiu.
+    fn check_zones(&self) {
+        let at = {
+            let me = self.shared.me.borrow();
+            if me.id.is_none() {
+                return;
+            }
+            me.position
+        };
+        let mut calls = Vec::new();
+        for z in self.shared.zones.borrow_mut().iter_mut() {
+            let inside = z.position.distance(at) <= z.radius;
+            if z.inside.replace(inside) != Some(inside) {
+                calls.push((z.handler.clone(), z.id.clone(), inside));
+            }
+        }
+        for (h, id, inside) in calls {
+            // Uma chamada anterior pode ter tirado a área ou posto outra no lugar.
+            let valid = |z: &Zone| Rc::ptr_eq(&z.handler, &h);
+            if self.shared.zones.borrow().iter().any(valid) {
+                let what = format!("área `{id}`");
+                self.shared.call(&h, &what, &[ScriptValue::Bool(inside)]);
             }
         }
     }
@@ -648,6 +732,37 @@ fn vec3_table(lua: &Lua, v: Vec3) -> mlua::Result<mlua::Table> {
     Ok(t)
 }
 
+/// `{ position = { x, y, z }, radius = r? }` de um marcador ou área.
+fn place(api: &str, t: &mlua::Table) -> mlua::Result<(Vec3, f32)> {
+    let p: mlua::Table = t.get("position")?;
+    let position = Vec3::new(p.get("x")?, p.get("y")?, p.get("z")?);
+    let radius = t.get::<Option<f32>>("radius")?.unwrap_or(1.0);
+    let finite = [position.x, position.y, position.z]
+        .iter()
+        .all(|v| v.is_finite());
+    if !finite || !(radius > 0.0 && radius <= MAX_RADIUS) {
+        return Err(rt(&format!("{api}: posição ou raio inválido")));
+    }
+    Ok((position, radius))
+}
+
+fn check_id(api: &str, id: &str) -> mlua::Result<()> {
+    if id.is_empty() || id.len() > MAX_ID {
+        return Err(rt(&format!("{api}: id com tamanho inválido")));
+    }
+    Ok(())
+}
+
+/// "#rrggbb"
+fn color(text: &str) -> Option<[u8; 3]> {
+    let hex = text.strip_prefix('#').filter(|h| h.len() == 6)?;
+    if !hex.bytes().all(|b| b.is_ascii_hexdigit()) {
+        return None;
+    }
+    let n = u32::from_str_radix(hex, 16).ok()?;
+    Some([(n >> 16) as u8, (n >> 8) as u8, n as u8])
+}
+
 fn install_api(
     lua: &Lua,
     resource: &Rc<str>,
@@ -918,6 +1033,110 @@ fn install_api(
         })?,
     )?;
     g.set("keys", keys_table)?;
+
+    let camera = lua.create_table()?;
+    let w = Rc::downgrade(shared);
+    camera.set(
+        "heading",
+        lua.create_function(move |_, ()| Ok(upgrade(&w)?.me.borrow().camera))?,
+    )?;
+    g.set("camera", camera)?;
+
+    // markers: desenhados no mundo pelo cliente
+    let markers = lua.create_table()?;
+    let (w, r) = (Rc::downgrade(shared), resource.clone());
+    markers.set(
+        "set",
+        lua.create_function(move |_, (id, t): (String, mlua::Table)| {
+            let s = upgrade(&w)?;
+            check_id("markers.set", &id)?;
+            let (position, radius) = place("markers.set", &t)?;
+            let label = t.get::<Option<String>>("label")?.unwrap_or_default();
+            if label.len() > MAX_LABEL {
+                return Err(rt("markers.set: texto grande demais"));
+            }
+            let color = match t.get::<Option<String>>("color")? {
+                Some(c) => color(&c).ok_or_else(|| rt("markers.set: cor deve ser #rrggbb"))?,
+                None => DEFAULT_COLOR,
+            };
+            let marker = Marker {
+                resource: r.to_string(),
+                id: id.clone(),
+                position,
+                radius,
+                color,
+                label,
+            };
+            let key = (r.to_string(), id);
+            let mut all = s.markers.borrow_mut();
+            if all.get(&key) == Some(&marker) {
+                return Ok(());
+            }
+            let mine = all.keys().filter(|(x, _)| **x == *r).count();
+            if mine >= MAX_MARKERS && !all.contains_key(&key) {
+                return Err(rt("markers.set: marcadores demais no recurso"));
+            }
+            all.insert(key, marker);
+            s.markers_changed.set(true);
+            Ok(())
+        })?,
+    )?;
+    let (w, r) = (Rc::downgrade(shared), resource.clone());
+    markers.set(
+        "remove",
+        lua.create_function(move |_, id: String| {
+            let s = upgrade(&w)?;
+            let found = s
+                .markers
+                .borrow_mut()
+                .remove(&(r.to_string(), id))
+                .is_some();
+            if found {
+                s.markers_changed.set(true);
+            }
+            Ok(found)
+        })?,
+    )?;
+    g.set("markers", markers)?;
+
+    // zones: áreas que avisam quando o jogador local entra e sai
+    let zones = lua.create_table()?;
+    let (w, r) = (Rc::downgrade(shared), resource.clone());
+    zones.set(
+        "set",
+        lua.create_function(move |lua, (id, t, func): (String, mlua::Table, Function)| {
+            let s = upgrade(&w)?;
+            check_id("zones.set", &id)?;
+            let (position, radius) = place("zones.set", &t)?;
+            let mut all = s.zones.borrow_mut();
+            let mine = |z: &Zone| z.handler.resource == r;
+            let others = all.iter().filter(|z| mine(z) && z.id != id).count();
+            if others >= MAX_ZONES {
+                return Err(rt("zones.set: áreas demais no recurso"));
+            }
+            all.retain(|z| !(mine(z) && z.id == id));
+            all.push(Zone {
+                id,
+                position,
+                radius,
+                inside: None,
+                handler: Rc::new(handler(&r, lua, func)),
+            });
+            Ok(())
+        })?,
+    )?;
+    let (w, r) = (Rc::downgrade(shared), resource.clone());
+    zones.set(
+        "remove",
+        lua.create_function(move |_, id: String| {
+            let s = upgrade(&w)?;
+            let mut all = s.zones.borrow_mut();
+            let before = all.len();
+            all.retain(|z| !(z.handler.resource == r && z.id == id));
+            Ok(all.len() != before)
+        })?,
+    )?;
+    g.set("zones", zones)?;
 
     let util = lua.create_table()?;
     util.set(

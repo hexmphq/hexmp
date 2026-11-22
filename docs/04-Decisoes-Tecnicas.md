@@ -555,8 +555,7 @@ hexmp/
 
 Feito em novembro de 2026 com a API atual (`hexmp.cfg`, `rp-kit`, `resources`):
 
-- Marcadores no mundo e no mapa, e áreas (entrar/sair): cada recurso mede distância num timer.
-- Direção da câmera no cliente: a seta do HUD só aponta certo com a câmera voltada para o norte.
+- ~~Marcadores no mundo, áreas (entrar/sair) e direção da câmera~~: feitos (`markers`, `zones`, `camera.heading`). O host desenha (`GameAdapter::set_markers`); a área é conferida no cliente e não vale como validação. Faltam ícones no mapa.
 - Posição dos outros jogadores no cliente: não dá para listar só quem está perto.
 - Nada impede andar antes de escolher personagem (só a tela): falta congelar/instanciar no servidor.
 - Excluir personagem no `rp-core`.

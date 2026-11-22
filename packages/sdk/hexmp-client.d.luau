@@ -39,6 +39,26 @@ declare me: {
     position: () -> Vec3,
 }
 
+declare camera: {
+    --- Para onde a câmera aponta: graus, 0 = norte (+y), sentido horário.
+    heading: () -> number,
+}
+
+declare markers: {
+    --- Círculo no chão do mundo, com texto em cima. O mesmo `id` substitui o anterior.
+    --- `radius` em metros (padrão 1), `color` "#rrggbb". Até 64 por recurso; somem com ele.
+    set: (id: string, marker: { position: Vec3, radius: number?, color: string?, label: string? }) -> (),
+    remove: (id: string) -> boolean,
+}
+
+declare zones: {
+    --- Área esférica (`radius` em metros, padrão 1) em volta do ponto: avisa quando o jogador
+    --- local entra (`true`) e sai (`false`), e uma vez no começo com o estado atual. O mesmo `id`
+    --- substitui a anterior. Até 64 por recurso. O servidor precisa conferir a distância de novo.
+    set: (id: string, area: { position: Vec3, radius: number? }, handler: (inside: boolean) -> ()) -> (),
+    remove: (id: string) -> boolean,
+}
+
 declare players: {
     --- Jogadores conhecidos pelo cliente.
     list: () -> { { id: number, name: string } },

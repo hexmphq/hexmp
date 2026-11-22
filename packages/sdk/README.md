@@ -3,7 +3,7 @@
 Definições de tipo para escrever recursos em Luau.
 
 - [`hexmp.d.luau`](hexmp.d.luau): API de **servidor** (`events`, `exports`, `rpc`, `timer`, `players`, `net`, `db`, `util`).
-- [`hexmp-client.d.luau`](hexmp-client.d.luau): API de **cliente** (`events`, `net.on`, `rpc.call`, `timer`, `me`, `players`, `ui`, `keys`, `util`).
+- [`hexmp-client.d.luau`](hexmp-client.d.luau): API de **cliente** (`events`, `net.on`, `rpc.call`, `timer`, `me`, `camera`, `markers`, `zones`, `players`, `ui`, `keys`, `util`).
 
 No VS Code com a extensão **luau-lsp**, adicione em `.vscode/settings.json`:
 
@@ -53,6 +53,18 @@ Regras do runtime:
 - O servidor envia `shared_scripts`, `client_scripts` e `files` a cada jogador quando ele entra e sempre que o recurso reinicia. O limite é 2 MB por recurso.
 - **Nada no cliente é confiável.** O jogador pode ler e alterar tudo o que roda nele. Preço, saldo e permissão são decididos no servidor (`rpc.define`). O cliente só pede.
 - Fluxo típico: a página chama `hexmp.callback("comprar", {item})`, o script de cliente faz `rpc.call("loja.comprar", {item}, cb)`, o servidor valida, e a resposta volta à página com `ui.send`.
+
+### Marcadores e áreas
+
+```lua
+local at = { x = 12, y = 6, z = 0 }
+markers.set("loja", { position = at, radius = 4, label = "Loja" })
+zones.set("loja", { position = at, radius = 4 }, function(inside)
+    print(if inside then "entrou" else "saiu")
+end)
+```
+
+O cliente desenha o marcador e confere a área a cada quadro: o recurso não precisa de timer. A área só serve para a tela. Como o jogador pode alterar o cliente, o servidor confere a distância no RPC.
 
 ### Contrato da NUI (página HTML)
 
