@@ -339,6 +339,12 @@ cliente  -> servidor do jogo (renet2): valida o connect token localmente, sem ch
 
 **Posse do GTA VI:** sem acordo com a Rockstar, **não há como verificar de forma confiável** que o jogador comprou o jogo (não existe API pública). O launcher apenas confere a instalação local, o que é burlável. Limitação registrada.
 
+**Como ficou (2026-11-22), com dois desvios:**
+
+- **A plataforma não tem as chaves netcode dos servidores.** Ela assina um bilhete (Ed25519, um servidor, 60 s, uso único) e o `hexmp-auth` do dono o troca pelo connect token. Invadir a plataforma não expõe as chaves dos donos, e cada dono aplica seus próprios bans.
+- **Sessão opaca revogável** (60 dias a partir do último uso, guardada como hash) em vez de token assinado + refresh token: revoga na hora, sem lista de revogação.
+- Do provedor só se guarda o id; sem e-mail, nome ou foto. Hardware ID e bans globais ainda não existem.
+
 **Modo standalone:** um servidor pode rodar sem o backend da plataforma, fazendo ele mesmo o login Steam/Discord/Google e gerando os próprios connect tokens. Para desenvolvimento, testes e quem não quiser depender da plataforma.
 
 **Backend da plataforma** (crate `platform`): Rust + `axum` + PostgreSQL, responsável por contas, vínculos, tokens, hardware ID, bans globais e lista de servidores. Primeiro serviço central do projeto.
