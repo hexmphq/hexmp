@@ -11,6 +11,7 @@ Regra geral: com uma pessoa só, **poucas linguagens, cada uma com papel claro**
 | Parte | Decisão | Alternativa descartada |
 |---|---|---|
 | Cliente | **Rust primeiro**: launcher, hooks, pattern scan, natives, DX12, rede, sync, scripts e UI em Rust; **C++ só em wrappers finos** (RmlUi e, se preciso, CEF) | tudo em C++ (duplica lógica do servidor); **híbrido adapter C++ + core Rust = plano B** |
+| Launcher | **Rust + egui/eframe**: um processo, sem depender do WebView2, sem página web para textos de estranhos da lista | Tauri (visual mais fácil em HTML/CSS; rever se houver vídeo de fundo ou notícias ricas) |
 | Servidor | **Rust**: simulação em thread dedicada a 30 Hz com `bevy_ecs` standalone; tokio só para I/O | C#/.NET (pausas de GC no tick, não compartilha código com o cliente) |
 | Protocolo | crate Rust compartilhada `protocol` | — |
 | Transporte | **renet2** (UDP + netcode), atrás de `trait Transport` | quinn, s2n-quic, msquic, lightyear, ENet; **GameNetworkingSockets = plano B** |
