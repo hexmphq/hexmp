@@ -131,6 +131,11 @@ fn http_service_register_login_and_rate_limit() {
         workers: 2,
         max_failed_logins: 3,
         max_registrations: 2,
+        password: true,
+        platform: Some((
+            ticket_key().verifying_key(),
+            "https://login.exemplo/".into(),
+        )),
         listing: None,
     };
     let service = Arc::new(
@@ -164,8 +169,30 @@ fn http_service_register_login_and_rate_limit() {
     assert!(read_token(&token).is_ok());
     assert_eq!(body["displayName"], "Ana");
 
+    // Conta HexM: o bilhete vira token uma vez só, e o ban deste servidor vale.
+    let ticket = |sub: &str, jti: &str| {
+        let t = hexmp_ticket::Ticket {
+            sub: sub.into(),
+            name: "Bia".into(),
+            aud: "https://login.exemplo".into(),
+            iat: crate::now().as_secs(),
+            jti: jti.into(),
+        };
+        format!(
+            r#"{{"ticket":"{}"}}"#,
+            hexmp_ticket::sign(&ticket_key(), &t)
+        )
+    };
+    assert_eq!(http(addr, "GET", "/v1/methods", "").1["hexm"], true);
+    let (status, body) = http(addr, "POST", "/v1/ticket", &ticket("hexm:1", "a"));
+    assert_eq!((status, &body["account"]), (200, &"hexm:1".into()));
+    assert_eq!(
+        http(addr, "POST", "/v1/ticket", &ticket("hexm:1", "a")).0,
+        401
+    );
+
     let wrong = r#"{"username":"Ana","password":"errada-errada"}"#;
-    for _ in 0..3 {
+    for _ in 0..2 {
         assert_eq!(http(addr, "POST", "/v1/login", wrong).0, 401);
     }
     // Bloqueado depois de 3 falhas, mesmo com a senha certa.
@@ -177,6 +204,21 @@ fn http_service_register_login_and_rate_limit() {
 }
 
 use base64::Engine;
+
+fn ticket_key() -> hexmp_ticket::SigningKey {
+    hexmp_ticket::SigningKey::from_bytes(&[7; 32])
+}
+
+#[test]
+fn platform_accounts_respect_bans() {
+    let mut st = store();
+    assert_eq!(st.admit("hexm:1", "Bia").unwrap().account, "hexm:1");
+    st.ban("hexm:1", "x", None).unwrap();
+    assert!(matches!(
+        st.admit("hexm:1", "Bia"),
+        Err(AuthError::Banned(_))
+    ));
+}
 
 #[test]
 fn public_info() {

@@ -286,7 +286,7 @@ impl PanelServer {
             .and_then(|p| p["account"].as_str())
             .ok_or_else(|| error(404, "jogador não está online"))?
             .to_string();
-        if !account.starts_with("hexmp:") {
+        if !account.starts_with("hexmp:") && !account.starts_with("hexm:") {
             return Err(error(
                 400,
                 "só contas reais podem ser banidas (modo --insecure)",

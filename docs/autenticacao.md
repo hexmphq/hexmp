@@ -33,6 +33,28 @@ Sem `--public-addr`, vale o endereço do `--bind`, o que só funciona localmente
 
 Em produção, coloque o `hexmp-auth` atrás de um proxy com HTTPS (Caddy ou nginx).
 
+## Conta HexM (opcional)
+
+O jogador entra no launcher pelo navegador (Discord, Google ou Steam) e usa a mesma conta em todos
+os servidores que aceitarem:
+
+```
+hexmp-auth serve ... --platform-key CHAVE_PUBLICA --public-url https://login.minhacidade.com
+```
+
+```
+launcher ──(sessão)──► plataforma ──► bilhete assinado: conta, este servidor, 1 minuto, uso único
+launcher ──(bilhete)─► hexmp-auth    confere a assinatura e o ban, devolve o connect token
+```
+
+- A conta chega como `hexm:<id>`; as criadas no próprio servidor são `hexmp:<uuid>`. São contas
+  diferentes para os dados do servidor.
+- O servidor recebe só o id e o nome escolhido: nada do Discord, Google ou Steam.
+- O bilhete não serve em outro servidor. A chave do servidor continua só com o dono, e o
+  `hexmp-auth` não fala com a plataforma.
+- `--public-url` precisa ser igual ao endereço que o jogador usa.
+- `--password off` desliga usuário e senha. `hexmp-auth ban hexm:<id>` funciona.
+
 ## Lista de servidores (opcional)
 
 Sem estas opções, nada é publicado. `server.json`:

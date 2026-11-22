@@ -17,6 +17,7 @@ hexmp-headless-bot = { path = "crates/headless-bot" }
 hexmp-scripting = { path = "crates/scripting" }
 hexmp-db = { path = "crates/db" }
 hexmp-auth = { path = "crates/auth" }
+hexmp-ticket = { path = "crates/ticket" }
 hexmp-client = { path = "crates/client" }
 bitcode = "0.6.9"
 mlua = { version = "0.12.2", features = ["luau"] }
@@ -33,6 +34,7 @@ base64 = "0.22"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tiny_http = "0.12"
+ed25519-dalek = "3"
 ureq = { version = "3.5", default-features = false, features = ["rustls", "json"] }
 ctrlc = { version = "3.5", features = ["termination"] }
 

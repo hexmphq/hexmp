@@ -207,6 +207,14 @@ impl AccountStore {
         Ok(parse_ban(&self.run(ban_check(account))?))
     }
 
+    /// Conta já conferida pela plataforma. Aqui só se olha o ban deste servidor.
+    pub fn admit(&mut self, account: &str, name: &str) -> Result<Identity, AuthError> {
+        match self.active_ban(account)? {
+            Some(ban) => Err(AuthError::Banned(ban)),
+            None => Ok(Identity::new(account, name)),
+        }
+    }
+
     fn find(&mut self, username: &str) -> Result<Option<ScriptValue>, AuthError> {
         let r = self.run(Statement::new(
             "SELECT id, display_name, password_hash FROM hexmp_accounts WHERE username = $1",

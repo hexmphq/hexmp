@@ -2,13 +2,15 @@
 //!
 //! - `POST /v1/register` `{"username", "password"}` → 201 `{"account", "displayName"}`
 //! - `POST /v1/login` `{"username", "password"}` → 200 `{"token", "account", "displayName", "expiresIn"}`
+//! - `POST /v1/ticket` `{"ticket"}` → igual ao login, com a conta HexM (só com `platform`)
+//! - `GET  /v1/methods` → 200 `{"password", "hexm"}`
 //! - `GET  /v1/health` → 200
 //! - `GET  /v1/info` e `GET /v1/image` → dados para a lista, só com [`Listing`] (senão 404)
 //!
 //! Erros: `{"error": "mensagem"}` com 400, 401, 403, 409, 413, 429 ou 500.
 //! Em produção, rode atrás de um proxy com HTTPS (Caddy, nginx): a senha não pode trafegar em texto puro.
 
-use crate::{AccountStore, AuthError, ServerKey, issue_token, random_client_id};
+use crate::{AccountStore, AuthError, Identity, ServerKey, issue_token, random_client_id};
 use base64::Engine;
 use serde::Deserialize;
 use serde_json::json;
@@ -28,6 +30,10 @@ pub struct ServiceConfig {
     pub max_failed_logins: u32,
     /// Contas criadas por IP por hora.
     pub max_registrations: u32,
+    /// Aceita usuário e senha deste servidor.
+    pub password: bool,
+    /// Aceita a conta HexM: chave pública da plataforma e endereço público deste serviço.
+    pub platform: Option<(hexmp_ticket::VerifyingKey, String)>,
     /// Presença na lista de servidores.
     pub listing: Option<crate::Listing>,
 }
@@ -39,6 +45,8 @@ impl Default for ServiceConfig {
             workers: 4,
             max_failed_logins: 10,
             max_registrations: 5,
+            password: true,
+            platform: None,
             listing: None,
         }
     }
@@ -99,12 +107,18 @@ pub struct AuthService {
     store: Mutex<AccountStore>,
     failed_logins: Limiter,
     registrations: Limiter,
+    tickets: Option<Mutex<hexmp_ticket::Verifier>>,
 }
 
 #[derive(Deserialize)]
 struct Credentials {
     username: String,
     password: String,
+}
+
+#[derive(Deserialize)]
+struct TicketBody {
+    ticket: String,
 }
 
 struct Reply {
@@ -131,6 +145,10 @@ impl AuthService {
             http,
             failed_logins: Limiter::new(config.max_failed_logins, Duration::from_secs(60)),
             registrations: Limiter::new(config.max_registrations, Duration::from_secs(3600)),
+            tickets: config
+                .platform
+                .as_ref()
+                .map(|(k, url)| Mutex::new(hexmp_ticket::Verifier::new(*k, url))),
             config,
             key,
             store: Mutex::new(store),
@@ -196,11 +214,25 @@ impl AuthService {
                 },
                 None => error(404, "este servidor não está na lista"),
             },
-            (Method::Post, "/v1/login") => match read_credentials(req) {
+            (Method::Get, "/v1/methods") => Reply {
+                status: 200,
+                body: json!({
+                    "password": self.config.password,
+                    "hexm": self.tickets.is_some(),
+                }),
+            },
+            (Method::Post, "/v1/ticket") => match read_json::<TicketBody>(req) {
+                Ok(b) => self.ticket(&b.ticket, ip),
+                Err(r) => r,
+            },
+            (Method::Post, "/v1/login" | "/v1/register") if !self.config.password => {
+                error(403, "este servidor só aceita a conta HexM")
+            }
+            (Method::Post, "/v1/login") => match read_json(req) {
                 Ok(c) => self.login(c, ip),
                 Err(r) => r,
             },
-            (Method::Post, "/v1/register") => match read_credentials(req) {
+            (Method::Post, "/v1/register") => match read_json(req) {
                 Ok(c) => self.register(c, ip),
                 Err(r) => r,
             },
@@ -214,29 +246,7 @@ impl AuthService {
         }
         let result = self.store().login(&c.username, &c.password);
         match result {
-            Ok(identity) => match issue_token(
-                &self.key,
-                &self.config.game_servers,
-                random_client_id(),
-                &identity,
-            ) {
-                Ok(token) => {
-                    tracing::info!(account = %identity.account, "login");
-                    Reply {
-                        status: 200,
-                        body: json!({
-                            "token": base64::engine::general_purpose::STANDARD.encode(token),
-                            "account": identity.account,
-                            "displayName": identity.display_name,
-                            "expiresIn": crate::TOKEN_EXPIRE_SECS,
-                        }),
-                    }
-                }
-                Err(e) => {
-                    tracing::error!("token: {e}");
-                    error(500, "erro interno")
-                }
-            },
+            Ok(identity) => self.token(&identity),
             Err(AuthError::BadCredentials) => {
                 self.failed_logins.hit(ip);
                 error(401, AuthError::BadCredentials)
@@ -244,6 +254,56 @@ impl AuthService {
             Err(e @ AuthError::Banned(_)) => error(403, e),
             Err(e) => {
                 tracing::error!("login: {e}");
+                error(500, "erro interno")
+            }
+        }
+    }
+
+    fn token(&self, identity: &Identity) -> Reply {
+        let servers = &self.config.game_servers;
+        match issue_token(&self.key, servers, random_client_id(), identity) {
+            Ok(token) => {
+                tracing::info!(account = %identity.account, "login");
+                Reply {
+                    status: 200,
+                    body: json!({
+                        "token": base64::engine::general_purpose::STANDARD.encode(token),
+                        "account": identity.account,
+                        "displayName": identity.display_name,
+                        "expiresIn": crate::TOKEN_EXPIRE_SECS,
+                    }),
+                }
+            }
+            Err(e) => {
+                tracing::error!("token: {e}");
+                error(500, "erro interno")
+            }
+        }
+    }
+
+    fn ticket(&self, text: &str, ip: IpAddr) -> Reply {
+        let Some(tickets) = &self.tickets else {
+            return error(404, "este servidor não aceita a conta HexM");
+        };
+        if self.failed_logins.blocked(ip) {
+            return error(429, "tentativas demais; aguarde um minuto");
+        }
+        let checked = tickets
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .accept(text, crate::now().as_secs());
+        let t = match checked {
+            Ok(t) => t,
+            Err(e) => {
+                self.failed_logins.hit(ip);
+                return error(401, e);
+            }
+        };
+        match self.store().admit(&t.sub, &t.name) {
+            Ok(identity) => self.token(&identity),
+            Err(e @ AuthError::Banned(_)) => error(403, e),
+            Err(e) => {
+                tracing::error!("bilhete: {e}");
                 error(500, "erro interno")
             }
         }
@@ -283,7 +343,7 @@ impl AuthService {
     }
 }
 
-fn read_credentials(req: &mut tiny_http::Request) -> Result<Credentials, Reply> {
+fn read_json<T: serde::de::DeserializeOwned>(req: &mut tiny_http::Request) -> Result<T, Reply> {
     if req.body_length().is_some_and(|n| n > MAX_BODY) {
         return Err(error(413, "corpo grande demais"));
     }
@@ -295,5 +355,5 @@ fn read_credentials(req: &mut tiny_http::Request) -> Result<Credentials, Reply> 
     if body.len() > MAX_BODY {
         return Err(error(413, "corpo grande demais"));
     }
-    serde_json::from_slice(&body).map_err(|_| error(400, "esperado JSON {username, password}"))
+    serde_json::from_slice(&body).map_err(|_| error(400, "JSON inesperado"))
 }

@@ -10,6 +10,7 @@ publish.workspace = true
 [dependencies]
 hexmp-protocol.workspace = true
 hexmp-db.workspace = true
+hexmp-ticket.workspace = true
 renet2_netcode.workspace = true
 argon2.workspace = true
 base64.workspace = true
