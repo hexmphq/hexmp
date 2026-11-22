@@ -131,6 +131,7 @@ fn http_service_register_login_and_rate_limit() {
         workers: 2,
         max_failed_logins: 3,
         max_registrations: 2,
+        listing: None,
     };
     let service = Arc::new(
         AuthService::bind(
@@ -176,6 +177,48 @@ fn http_service_register_login_and_rate_limit() {
 }
 
 use base64::Engine;
+
+#[test]
+fn public_info() {
+    let dir = std::env::temp_dir().join(format!("hexmp-info-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let (info, status) = (dir.join("server.json"), dir.join("status.json"));
+    let load = |text: &str, list: &str| {
+        std::fs::write(&info, text).unwrap();
+        crate::Listing::load(&info, &status, list, "https://login.exemplo")
+    };
+    let list = "https://lista.exemplo/";
+    let long = format!(r#"{{"name":"{}"}}"#, "x".repeat(49));
+    for bad in [
+        "{",
+        "{}",
+        r#"{"name":" "}"#,
+        long.as_str(),
+        r#"{"name":"a","typo":1}"#,
+        r#"{"name":"a","image":"server.json"}"#,
+        r#"{"name":"a","tags":["1","2","3","4","5"]}"#,
+    ] {
+        assert!(load(bad, list).is_err(), "{bad}");
+    }
+    assert!(load(r#"{"name":"a"}"#, "http://lista.exemplo").is_err());
+    let l = load(r#"{"name":"Cidade","language":"pt"}"#, list).unwrap();
+    let write = |age: i64| {
+        let at = crate::now_ms() - age;
+        std::fs::write(
+            &status,
+            format!(r#"{{"players":3,"maxPlayers":8,"updatedAt":{at}}}"#),
+        )
+        .unwrap();
+        l.reply()
+    };
+    assert_eq!(l.reply()["online"], false);
+    let r = write(0);
+    assert_eq!((&r["online"], &r["players"]), (&true.into(), &3.into()));
+    assert_eq!(r["list"], "https://lista.exemplo");
+    // Servidor de jogo parado não conta como online.
+    assert_eq!(write(60_000)["online"], false);
+    std::fs::remove_dir_all(dir).unwrap();
+}
 
 /// Roda no PostgreSQL só quando `HEXMP_TEST_POSTGRES_URL` existe (CI).
 #[test]

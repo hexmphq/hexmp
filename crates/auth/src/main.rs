@@ -1,4 +1,4 @@
-use hexmp_auth::{AccountStore, AuthService, ServerKey, ServiceConfig};
+use hexmp_auth::{ANNOUNCE_EVERY, AccountStore, AuthService, Listing, ServerKey, ServiceConfig};
 use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -7,6 +7,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 const USAGE: &str = "uso:
   hexmp-auth keygen --key server.key
   hexmp-auth serve --db URL --key server.key --game-server IP:30120 [--game-server ...] [--bind 0.0.0.0:30121]
+                   [--list https://LISTA --public-url https://ESTE_SERVICO --info server.json --status status.json]
   hexmp-auth ban USUARIO --db URL [--reason TEXTO] [--hours N]
   hexmp-auth unban USUARIO --db URL";
 
@@ -24,6 +25,10 @@ struct Args {
     game_servers: Vec<SocketAddr>,
     reason: Option<String>,
     hours: Option<f64>,
+    list: Option<String>,
+    public_url: Option<String>,
+    info: Option<PathBuf>,
+    status: Option<PathBuf>,
 }
 
 fn parse() -> Args {
@@ -40,6 +45,10 @@ fn parse() -> Args {
             "--db" => a.db.replace(v).is_none(),
             "--bind" => v.parse().map(|x| a.bind = Some(x)).is_ok(),
             "--game-server" => v.parse().map(|x| a.game_servers.push(x)).is_ok(),
+            "--list" => a.list.replace(v).is_none(),
+            "--public-url" => a.public_url.replace(v).is_none(),
+            "--info" => a.info.replace(v.into()).is_none(),
+            "--status" => a.status.replace(v.into()).is_none(),
             "--reason" => a.reason.replace(v).is_none(),
             "--hours" => v.parse().map(|x| a.hours = Some(x)).is_ok(),
             _ => false,
@@ -85,12 +94,37 @@ fn main() {
                 fail("faltou --game-server IP:PORTA (endereço público do servidor de jogo)");
             }
             let bind = a.bind.unwrap_or_else(|| ([0, 0, 0, 0], 30121).into());
+            let listing = match (&a.list, &a.public_url, &a.info, &a.status) {
+                (None, None, None, None) => None,
+                (Some(list), Some(url), Some(info), Some(status)) => {
+                    Some(Listing::load(info, status, list, url).unwrap_or_else(|e| fail(e)))
+                }
+                _ => fail("--list, --public-url, --info e --status andam juntos"),
+            };
             let config = ServiceConfig {
+                listing: listing.clone(),
                 game_servers: a.game_servers.clone(),
                 ..ServiceConfig::default()
             };
             let service =
                 AuthService::bind(bind, config, key, store(&a)).unwrap_or_else(|e| fail(e));
+            if let Some(l) = listing {
+                std::thread::spawn(move || {
+                    let mut last = None;
+                    loop {
+                        let result = l.announce();
+                        // Só registra quando muda.
+                        if last.as_ref() != Some(&result) {
+                            match &result {
+                                Ok(()) => tracing::info!("publicado na lista de servidores"),
+                                Err(e) => tracing::warn!("lista de servidores: {e}"),
+                            }
+                            last = Some(result);
+                        }
+                        std::thread::sleep(ANNOUNCE_EVERY);
+                    }
+                });
+            }
             let stop = Arc::new(AtomicBool::new(false));
             let flag = stop.clone();
             let _ = ctrlc::set_handler(move || flag.store(true, Ordering::Relaxed));

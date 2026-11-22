@@ -3,6 +3,7 @@
 pub mod admin;
 pub mod logs;
 pub mod panel;
+pub mod status;
 pub mod transport;
 
 use admin::{AdminCommand, AdminInbox, AdminReply, ResourceAction};

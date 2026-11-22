@@ -33,6 +33,25 @@ Sem `--public-addr`, vale o endereço do `--bind`, o que só funciona localmente
 
 Em produção, coloque o `hexmp-auth` atrás de um proxy com HTTPS (Caddy ou nginx).
 
+## Lista de servidores (opcional)
+
+Sem estas opções, nada é publicado. `server.json`:
+
+```json
+{"name":"Minha cidade","description":"...","tags":["RP sério"],"language":"pt","image":"capa.jpg"}
+```
+
+Limites: nome 48 letras, descrição 220, 4 tags de 16, imagem PNG/JPEG de até 512 KB e 2048 px.
+
+```
+hexmp-server ... --status status.json
+hexmp-auth serve ... --info server.json --status status.json \
+  --list https://LISTA --public-url https://login.minhacidade.com
+```
+
+O `hexmp-auth` avisa a lista a cada minuto e ela confere em `--public-url` + `/v1/info`. O nome e o
+número de jogadores ficam públicos. Reinicie o `hexmp-auth` depois de mudar o `server.json`.
+
 ## Desenvolvimento
 
 ```

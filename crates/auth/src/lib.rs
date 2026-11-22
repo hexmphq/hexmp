@@ -12,6 +12,7 @@
 mod http;
 mod identity;
 mod key;
+mod listing;
 mod store;
 #[cfg(test)]
 mod tests;
@@ -19,6 +20,7 @@ mod tests;
 pub use http::{AuthService, ServiceConfig};
 pub use identity::{Identity, IdentityError};
 pub use key::{KeyError, ServerKey};
+pub use listing::{ANNOUNCE_EVERY, Listing};
 pub use store::{AccountStore, AuthError, Ban, ban_check, migrate, parse_ban};
 
 use hexmp_protocol::NETCODE_PROTOCOL_ID;

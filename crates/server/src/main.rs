@@ -10,7 +10,7 @@ use std::time::{Duration, Instant};
 
 const USAGE: &str = "uso: hexmp-server (--key server.key [--public-addr IP:PORTA]... | --insecure) \
 [--bind 0.0.0.0:30120] [--max-clients 64] [--resources ./resources]... [--db URL] \
-[--hot-reload SEGUNDOS] [--seconds N] [--panel 127.0.0.1:30122 | --panel off] [--panel-key admin.key]";
+[--hot-reload SEGUNDOS] [--seconds N] [--panel 127.0.0.1:30122 | --panel off] [--panel-key admin.key] [--status status.json]";
 
 fn main() {
     use tracing_subscriber::layer::SubscriberExt;
@@ -35,6 +35,7 @@ fn main() {
     let mut insecure = false;
     let mut panel_addr: Option<SocketAddr> = Some(([127, 0, 0, 1], 30122).into());
     let mut panel_key = PathBuf::from("admin.key");
+    let mut status_path: Option<PathBuf> = None;
     let mut args = std::env::args().skip(1);
     while let Some(arg) = args.next() {
         if arg == "--insecure" {
@@ -60,6 +61,7 @@ fn main() {
                 }
             }),
             "--panel-key" => value.map(|v| panel_key = v.into()),
+            "--status" => value.map(|v| status_path = Some(v.into())),
             "--public-addr" => value
                 .and_then(|v| v.parse().ok())
                 .map(|v| public_addrs.push(v)),
@@ -215,9 +217,19 @@ fn main() {
     if let Some(db) = bans {
         server = server.with_bans(db);
     }
-    server.run(|_| {
+    let status = status_path.map(|p| {
+        hexmp_server::status::StatusFile::start(p.clone(), max_clients).unwrap_or_else(|e| {
+            eprintln!("status {}: {e}", p.display());
+            std::process::exit(1);
+        })
+    });
+    server.run(|s| {
+        if let Some(f) = &status {
+            f.set_players(s.world.player_count());
+        }
         interrupted.load(Ordering::Relaxed) || deadline.is_some_and(|d| Instant::now() >= d)
     });
+    drop(status);
     if interrupted.load(Ordering::Relaxed) {
         tracing::info!("encerrando: gravando dados pendentes (Ctrl+C de novo para forçar)");
     }

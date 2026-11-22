@@ -3,6 +3,7 @@
 //! - `POST /v1/register` `{"username", "password"}` → 201 `{"account", "displayName"}`
 //! - `POST /v1/login` `{"username", "password"}` → 200 `{"token", "account", "displayName", "expiresIn"}`
 //! - `GET  /v1/health` → 200
+//! - `GET  /v1/info` e `GET /v1/image` → dados para a lista, só com [`Listing`] (senão 404)
 //!
 //! Erros: `{"error": "mensagem"}` com 400, 401, 403, 409, 413, 429 ou 500.
 //! Em produção, rode atrás de um proxy com HTTPS (Caddy, nginx): a senha não pode trafegar em texto puro.
@@ -27,6 +28,8 @@ pub struct ServiceConfig {
     pub max_failed_logins: u32,
     /// Contas criadas por IP por hora.
     pub max_registrations: u32,
+    /// Presença na lista de servidores.
+    pub listing: Option<crate::Listing>,
 }
 
 impl Default for ServiceConfig {
@@ -36,6 +39,7 @@ impl Default for ServiceConfig {
             workers: 4,
             max_failed_logins: 10,
             max_registrations: 5,
+            listing: None,
         }
     }
 }
@@ -159,6 +163,14 @@ impl AuthService {
             .remote_addr()
             .map(|a| a.ip())
             .unwrap_or(IpAddr::from([0, 0, 0, 0]));
+        if *req.method() == tiny_http::Method::Get
+            && req.url() == "/v1/image"
+            && let Some((data, kind)) = self.config.listing.as_ref().and_then(|l| l.image())
+        {
+            let header = tiny_http::Header::from_bytes("Content-Type", kind).expect("estático");
+            let _ = req.respond(tiny_http::Response::from_data(data).with_header(header));
+            return;
+        }
         let reply = self.route(&mut req, ip);
         let header =
             tiny_http::Header::from_bytes("Content-Type", "application/json; charset=utf-8")
@@ -176,6 +188,13 @@ impl AuthService {
             (Method::Get, "/v1/health") => Reply {
                 status: 200,
                 body: json!({ "ok": true }),
+            },
+            (Method::Get, "/v1/info") => match &self.config.listing {
+                Some(l) => Reply {
+                    status: 200,
+                    body: l.reply(),
+                },
+                None => error(404, "este servidor não está na lista"),
             },
             (Method::Post, "/v1/login") => match read_credentials(req) {
                 Ok(c) => self.login(c, ip),
