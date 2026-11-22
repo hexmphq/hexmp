@@ -70,6 +70,27 @@ local function bagOf(playerId: number): Bag
     return b
 end
 
+local function snapshot(b: Bag)
+    local list = {}
+    for name, n in b.items do
+        local def = registry[name]
+        table.insert(list, {
+            item = name,
+            label = if def then def.label else name,
+            amount = n,
+            usable = def ~= nil and def.usable,
+        })
+    end
+    table.sort(list, function(a, c)
+        return a.item < c.item
+    end)
+    return { items = list, weight = weightOf(b), maxWeight = InventoryConfig.maxWeight }
+end
+
+local function changed(playerId: number)
+    net.emit(playerId, "rp:inventory:changed", snapshot(bagOf(playerId)))
+end
+
 local function add(playerId: number, item: string, amount: number)
     local def = registry[item]
     if def == nil then
@@ -84,6 +105,7 @@ local function add(playerId: number, item: string, amount: number)
     end
     b.items[item] = (b.items[item] or 0) + amount
     b.dirty[item] = true
+    changed(playerId)
     return b.items[item]
 end
 
@@ -99,19 +121,8 @@ local function remove(playerId: number, item: string, amount: number)
     local left = have - amount
     b.items[item] = if left > 0 then left else nil
     b.dirty[item] = true
+    changed(playerId)
     return left
-end
-
-local function snapshot(b: Bag)
-    local list = {}
-    for name, n in b.items do
-        local def = registry[name]
-        table.insert(list, { item = name, label = if def then def.label else name, amount = n })
-    end
-    table.sort(list, function(a, c)
-        return a.item < c.item
-    end)
-    return { items = list, weight = weightOf(b), maxWeight = InventoryConfig.maxWeight }
 end
 
 -- Carregamento -------------------------------------------------------------

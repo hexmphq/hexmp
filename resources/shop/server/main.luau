@@ -9,6 +9,9 @@ rpc.define("shop.buy", { rateLimit = "5/2s" }, function(player, itemId)
     if item == nil then
         error("item inválido")
     end
+    if not Perto(player.position) then
+        error("você está longe da loja")
+    end
     local saldo = exports.call("rp-money", "remove", player.id, "cash", item.preco, "loja: " .. itemId)
     local ok, err = pcall(exports.call, "rp-inventory", "add", player.id, itemId, 1)
     if not ok then

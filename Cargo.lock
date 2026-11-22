@@ -757,6 +757,7 @@ version = "0.1.0"
 dependencies = [
  "base64 0.22.1",
  "hexmp-auth",
+ "hexmp-db",
  "hexmp-protocol",
  "hexmp-scripting",
  "hexmp-server",

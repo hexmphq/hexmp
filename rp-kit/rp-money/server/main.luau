@@ -78,6 +78,7 @@ local function change(playerId: number, account: string, amount: number, reason:
     w[account] = new
     w.dirty = true
     table.insert(w.log, logStatement(w, account, amount, reason))
+    net.emit(playerId, "rp:money:changed", { cash = w.cash, bank = w.bank })
     return new
 end
 

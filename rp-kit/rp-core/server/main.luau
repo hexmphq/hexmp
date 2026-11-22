@@ -100,6 +100,7 @@ local function finishLoading(playerId: number)
     active[playerId] = l.char
     players.setPosition(playerId, l.char.position)
     events.emit("rp:characterLoaded", playerId, l.char)
+    net.emit(playerId, "rp:characterLoaded", summary(l.char))
     l.reply.ok(summary(l.char))
 end
 
@@ -113,6 +114,7 @@ local function unload(playerId: number)
     local st = savePositionStatement(playerId, c)
     db.execute(st[1], st[2])
     active[playerId] = nil
+    net.emit(playerId, "rp:characterUnloaded")
 end
 
 -- Exports para os módulos -------------------------------------------------
@@ -232,7 +234,7 @@ rpc.define("rp.characters.select", { rateLimit = "5/10s" }, function(player, id)
             if err or rows[1] == nil then
                 return reply.fail("personagem não encontrado")
             end
-            if players.get(player.id) == nil or active[player.id] then
+            if players.get(player.id) == nil or active[player.id] or loading[player.id] then
                 return reply.fail("personagem não encontrado")
             end
             local missing = {}

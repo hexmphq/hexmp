@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <main id="screen" hidden>
+    <section id="choose">
+      <h1>Escolha seu personagem</h1>
+      <div id="list"></div>
+    </section>
+    <form id="create" hidden>
+      <h1>Novo personagem</h1>
+      <label>Nome <input id="first" maxlength="20" autocomplete="off" required></label>
+      <label>Sobrenome <input id="last" maxlength="20" autocomplete="off" required></label>
+      <fieldset>
+        <legend>Nascimento</legend>
+        <input id="day" inputmode="numeric" maxlength="2" placeholder="Dia" aria-label="Dia" required>
+        <input id="month" inputmode="numeric" maxlength="2" placeholder="Mês" aria-label="Mês" required>
+        <input id="year" inputmode="numeric" maxlength="4" placeholder="Ano" aria-label="Ano" required>
+      </fieldset>
+      <div class="row">
+        <button type="button" id="back">Voltar</button>
+        <button class="main">Criar</button>
+      </div>
+    </form>
+    <p id="error" role="alert"></p>
+  </main>
+  <script src="app.js"></script>
+</body>
+</html>

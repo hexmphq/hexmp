@@ -10,6 +10,7 @@ function log(text) {
   const line = document.createElement("div");
   line.textContent = text;
   $("log").append(line);
+  setTimeout(() => line.remove(), 8000);
   while ($("log").children.length > 5) $("log").firstChild.remove();
 }
 
@@ -28,7 +29,13 @@ window.addEventListener("message", (e) => {
 });
 
 // O script (ou o jogador) passou o teclado para esta página.
-window.addEventListener("focus", () => $("text").focus());
+const open = (on) => {
+  $("ping").classList.toggle("open", on);
+  if (on) $("text").focus();
+};
+window.addEventListener("focus", () => open(true));
+window.addEventListener("blur", () => open(false));
+if (document.hasFocus()) open(true);
 window.addEventListener("keydown", (e) => {
   if (e.key === "Escape" && window.hexmp) window.hexmp.callback("close", null);
 });

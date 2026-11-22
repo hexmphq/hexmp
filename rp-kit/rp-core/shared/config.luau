@@ -1,6 +1,7 @@
 --!strict
 Config = {
     maxCharacters = 3,
+    -- Onde nasce um personagem novo.
     spawn = { x = 0, y = 0, z = 0 },
     -- Intervalo da gravação em lote (posições).
     saveIntervalMs = 5000,

@@ -10,7 +10,9 @@ use std::time::{Duration, Instant};
 
 const USAGE: &str = "uso: hexmp-server (--key server.key [--public-addr IP:PORTA]... | --insecure) \
 [--bind 0.0.0.0:30120] [--max-clients 64] [--resources ./resources]... [--db URL] \
-[--hot-reload SEGUNDOS] [--seconds N] [--panel 127.0.0.1:30122 | --panel off] [--panel-key admin.key] [--status status.json]";
+[--hot-reload SEGUNDOS] [--seconds N] [--panel 127.0.0.1:30122 | --panel off] [--panel-key admin.key] [--status status.json]\nsem argumentos, as opções vêm do hexmp.cfg da pasta atual";
+
+const CONFIG_FILE: &str = "hexmp.cfg";
 
 fn main() {
     use tracing_subscriber::layer::SubscriberExt;
@@ -36,7 +38,21 @@ fn main() {
     let mut panel_addr: Option<SocketAddr> = Some(([127, 0, 0, 1], 30122).into());
     let mut panel_key = PathBuf::from("admin.key");
     let mut status_path: Option<PathBuf> = None;
-    let mut args = std::env::args().skip(1);
+    let mut args: Vec<String> = std::env::args().skip(1).collect();
+    if args.is_empty() {
+        match std::fs::read_to_string(CONFIG_FILE) {
+            Ok(text) => {
+                tracing::info!("opções do {CONFIG_FILE}");
+                args = hexmp_server::config_args(&text);
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => {
+                eprintln!("{CONFIG_FILE}: {e}");
+                std::process::exit(1);
+            }
+        }
+    }
+    let mut args = args.into_iter();
     while let Some(arg) = args.next() {
         if arg == "--insecure" {
             insecure = true;
@@ -71,7 +87,7 @@ fn main() {
             _ => None,
         };
         if parsed.is_none() {
-            eprintln!("{USAGE}");
+            eprintln!("opção inválida: {arg}\n{USAGE}");
             std::process::exit(2);
         }
     }

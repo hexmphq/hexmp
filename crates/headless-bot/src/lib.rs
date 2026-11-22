@@ -15,6 +15,8 @@ use std::time::{Duration, SystemTime};
 pub enum Behavior {
     /// Anda em círculo a velocidade normal.
     Walk { radius: f32, speed: f32 },
+    /// Anda em linha reta até lá e para.
+    GoTo { target: Vec3, speed: f32 },
     /// Tenta se teletransportar (para testar a validação do servidor).
     Teleport,
     /// Fica parado (não manda input).
@@ -33,7 +35,7 @@ pub struct BotStats {
 
 pub struct Bot {
     pub name: String,
-    behavior: Behavior,
+    pub behavior: Behavior,
     client: RenetClient,
     transport: NetcodeClientTransport,
     hello_sent: bool,
@@ -157,7 +159,7 @@ impl Bot {
             self.receive();
             if self.player_id.is_some() {
                 self.elapsed += dt.as_secs_f32();
-                self.move_step();
+                self.move_step(dt.as_secs_f32());
             }
         }
 
@@ -180,12 +182,22 @@ impl Bot {
         self.transport.disconnect();
     }
 
-    fn move_step(&mut self) {
+    fn move_step(&mut self, dt: f32) {
         self.position = match self.behavior {
             Behavior::Idle => return,
             Behavior::Walk { radius, speed } => {
                 let angle = self.elapsed * speed / radius;
                 Vec3::new(radius * angle.cos() - radius, radius * angle.sin(), 0.0)
+            }
+            Behavior::GoTo { target, speed } => {
+                let left = self.position.distance(target);
+                let k = (speed * dt / left.max(0.001)).min(1.0);
+                let p = self.position;
+                Vec3::new(
+                    p.x + (target.x - p.x) * k,
+                    p.y + (target.y - p.y) * k,
+                    p.z + (target.z - p.z) * k,
+                )
             }
             Behavior::Teleport => Vec3::new(5000.0, 5000.0, 0.0),
         };

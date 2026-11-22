@@ -551,6 +551,18 @@ hexmp/
 
 ---
 
+## O que o servidor de exemplo mostrou que falta na API
+
+Feito em novembro de 2026 com a API atual (`hexmp.cfg`, `rp-kit`, `resources`):
+
+- Marcadores no mundo e no mapa, e áreas (entrar/sair): cada recurso mede distância num timer.
+- Direção da câmera no cliente: a seta do HUD só aponta certo com a câmera voltada para o norte.
+- Posição dos outros jogadores no cliente: não dá para listar só quem está perto.
+- Nada impede andar antes de escolher personagem (só a tela): falta congelar/instanciar no servidor.
+- Excluir personagem no `rp-core`.
+
+---
+
 ## Decisões em aberto
 
 Nenhuma decisão de stack em aberto. Pendências fora da técnica: compra dos domínios (`hexm.gg` + `hexm.com.br`), busca/registro de marca no INPI, exigir 2FA na organização `hexmphq`, revisão jurídica (licença, LGPD, monetização) e certificado de code signing.

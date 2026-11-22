@@ -46,6 +46,11 @@ fn pump(
     false
 }
 
+fn pump_for(c: &mut Client, ui: &mut Vec<ScriptValue>, time: Duration) {
+    let start = Instant::now();
+    pump(c, ui, |_, _| start.elapsed() >= time);
+}
+
 #[test]
 fn client_scripts_ui_rpc_announce_and_restart() {
     let (admin, inbox) = hexmp_server::admin::channel();
@@ -186,4 +191,173 @@ fn two_clients_see_each_other_and_get_corrections() {
     assert!(pump(&mut b, &mut ui, |c, _| c.remote_players().is_empty()));
     stop.store(true, Ordering::Relaxed);
     server.join().unwrap();
+}
+
+/// O servidor de exemplo inteiro, jogado pelas telas.
+#[test]
+fn example_server_from_character_to_payday() {
+    use hexmp_protocol::Vec3;
+    let file = std::env::temp_dir().join(format!("hexmp-exemplo-{}.db", std::process::id()));
+    let _ = std::fs::remove_file(&file);
+    let url = format!("sqlite:{}", file.display().to_string().replace('\\', "/"));
+    let stop = Arc::new(AtomicBool::new(false));
+    let (tx, rx) = std::sync::mpsc::channel();
+    let server = {
+        let stop = stop.clone();
+        std::thread::spawn(move || {
+            let transport =
+                RenetTransport::bind("127.0.0.1:0".parse().unwrap(), 8, NetAuth::Insecure).unwrap();
+            tx.send(transport.local_addr()).unwrap();
+            let repo = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+            let mut engine = ScriptEngine::new(repo.join("rp-kit"), EngineConfig::default())
+                .with_db(hexmp_db::Db::connect(&url).unwrap());
+            engine.add_root(repo.join("resources"));
+            for (name, r) in engine.start_all() {
+                r.unwrap_or_else(|e| panic!("{name}: {e}"));
+            }
+            let mut server =
+                GameServer::new(transport, ServerConfig::default()).with_scripts(engine);
+            server.run(|_| stop.load(Ordering::Relaxed));
+            server.scripts_mut().unwrap().shutdown();
+        })
+    };
+    let addr = rx.recv_timeout(Duration::from_secs(5)).unwrap();
+    let mut c = Client::connect_insecure(addr, "Ana", 77).unwrap();
+    let mut ui = Vec::new();
+    let text = |v: &str| ScriptValue::String(v.into());
+    let map = |m: &[(&str, &str)]| {
+        ScriptValue::Map(m.iter().map(|(k, v)| (k.to_string(), text(v))).collect())
+    };
+    let list = |v: &ScriptValue| match field(v, "characters") {
+        Some(ScriptValue::Array(a)) => a.clone(),
+        _ => Vec::new(),
+    };
+    let said = |ui: &[ScriptValue], start: &str| {
+        ui.iter().any(|m| match field(m, "text") {
+            Some(ScriptValue::String(s)) => s.starts_with(start),
+            _ => false,
+        })
+    };
+    let cash = |ui: &[ScriptValue]| {
+        let last = ui.iter().rev().find(|m| ui_type(m) == Some("state"))?;
+        match field(field(last, "money")?, "cash") {
+            Some(ScriptValue::Number(n)) => Some(*n),
+            _ => None,
+        }
+    };
+
+    // A tela de personagens abre sozinha, com o input.
+    assert!(pump(&mut c, &mut ui, |_, ui| ui
+        .iter()
+        .any(|m| ui_type(m) == Some("list"))));
+    assert_eq!(c.runtime.ui_focus().as_deref(), Some("rp-characters"));
+    let bad = map(&[("firstName", "1"), ("lastName", "S"), ("birthdate", "x")]);
+    c.runtime
+        .ui_callback("rp-characters", "create", bad)
+        .unwrap();
+    assert!(pump(&mut c, &mut ui, |_, ui| said(ui, "nome inválido")));
+    let good = map(&[
+        ("firstName", "Ana"),
+        ("lastName", "Souza"),
+        ("birthdate", "1995-04-12"),
+    ]);
+    c.runtime
+        .ui_callback("rp-characters", "create", good)
+        .unwrap();
+    assert!(pump(&mut c, &mut ui, |_, ui| ui
+        .iter()
+        .any(|m| !list(m).is_empty())));
+    let all = ui.iter().map(list).find(|l| !l.is_empty()).unwrap();
+    let Some(ScriptValue::String(id)) = field(&all[0], "id") else {
+        panic!("{all:?}")
+    };
+    let pick = map(&[("id", id)]);
+    c.runtime
+        .ui_callback("rp-characters", "select", pick)
+        .unwrap();
+    assert!(pump(&mut c, &mut ui, |c, ui| cash(ui) == Some(500.0)
+        && c.runtime.ui_focus().is_none()));
+    assert!(pump(&mut c, &mut ui, |_, ui| ui
+        .iter()
+        .any(|m| ui_type(m) == Some("points"))));
+    while c.take_correction().is_some() {}
+
+    // Loja: a dica aparece perto, e E abre.
+    let mut at = Vec3::ZERO;
+    let mut walk = |c: &mut Client, ui: &mut Vec<ScriptValue>, to: Vec3| {
+        while at != to {
+            let k = (1.0 / at.distance(to).max(0.001)).min(1.0);
+            at = Vec3::new(at.x + (to.x - at.x) * k, at.y + (to.y - at.y) * k, 0.0);
+            if at.distance(to) < 0.001 {
+                at = to;
+            }
+            c.set_position(at);
+            pump_for(c, ui, Duration::from_millis(20));
+        }
+        pump_for(c, ui, Duration::from_millis(500));
+    };
+    c.runtime.key(0x45, true);
+    c.runtime.key(0x45, false);
+    assert!(c.runtime.ui_focus().is_none(), "longe não abre");
+    walk(&mut c, &mut ui, Vec3::new(12.0, 6.0, 0.0));
+    assert!(said(&ui, "E: abrir a loja"));
+    c.runtime.key(0x45, true);
+    c.runtime.key(0x45, false);
+    assert_eq!(c.runtime.ui_focus().as_deref(), Some("shop"));
+    let water = map(&[("item", "agua")]);
+    c.runtime.ui_callback("shop", "buy", water.clone()).unwrap();
+    assert!(pump(&mut c, &mut ui, |_, ui| cash(ui) == Some(495.0)
+        && said(ui, "Comprou: Água")));
+    c.runtime
+        .ui_callback("shop", "close", ScriptValue::Nil)
+        .unwrap();
+    assert!(c.runtime.ui_focus().is_none());
+
+    // Inventário.
+    c.runtime.key(0x49, true);
+    c.runtime.key(0x49, false);
+    assert_eq!(c.runtime.ui_focus().as_deref(), Some("rp-hud"));
+    c.runtime.ui_callback("rp-hud", "use", water).unwrap();
+    assert!(pump(&mut c, &mut ui, |_, ui| said(ui, "Você usou: Água")));
+    c.runtime
+        .ui_callback("rp-hud", "close", ScriptValue::Nil)
+        .unwrap();
+
+    // Emprego.
+    walk(&mut c, &mut ui, Vec3::new(-12.0, 6.0, 0.0));
+    assert!(said(&ui, "E: pegar um pacote"));
+    c.runtime.key(0x45, true);
+    c.runtime.key(0x45, false);
+    assert!(pump(&mut c, &mut ui, |_, ui| said(ui, "Leve o pacote até")));
+    let places = [
+        ("Rua", 60.0, 30.0),
+        ("Avenida", -70.0, 45.0),
+        ("Travessa", 20.0, -60.0),
+        ("Praça", -40.0, -50.0),
+    ];
+    let to = places
+        .iter()
+        .find(|p| said(&ui, &format!("Leve o pacote até {}", p.0)));
+    let (_, x, y) = to.unwrap();
+    walk(&mut c, &mut ui, Vec3::new(*x, *y, 0.0));
+    assert!(said(&ui, "E: entregar o pacote"));
+    c.runtime.key(0x45, true);
+    c.runtime.key(0x45, false);
+    assert!(pump(&mut c, &mut ui, |_, ui| said(ui, "Entregue!")
+        && cash(ui).unwrap() > 540.0));
+
+    // Trocar de personagem volta à tela.
+    ui.clear();
+    c.runtime.key(0x74, true);
+    c.runtime.key(0x74, false);
+    assert!(pump(&mut c, &mut ui, |c, ui| {
+        c.runtime.ui_focus().as_deref() == Some("rp-characters")
+            && ui.iter().any(|m| list(m).len() == 1)
+    }));
+    assert_eq!(c.runtime.script_errors(), 0);
+
+    c.disconnect();
+    stop.store(true, Ordering::Relaxed);
+    server.join().unwrap();
+    let _ = std::fs::remove_file(&file);
 }

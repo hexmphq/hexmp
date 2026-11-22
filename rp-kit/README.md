@@ -7,11 +7,15 @@ Recursos base de roleplay, em Luau, licença MIT OR Apache-2.0. Use como estão 
 | `rp-core` | Personagens por conta (até 3): criar, listar, selecionar, sair. Salva a posição. Coordena o carregamento dos módulos. |
 | `rp-money` | Dinheiro em mão (`cash`) e no banco (`bank`), transferências e extrato. |
 | `rp-inventory` | Inventário por personagem com peso máximo, uso e entrega de itens. |
+| `rp-characters` | Tela de criar e escolher personagem (F5 troca). |
+| `rp-hud` | Dinheiro, inventário (I), avisos, dicas e pontos de interesse na tela. |
+
+Os três primeiros são só servidor. As telas são recursos à parte: troque por outra sem mexer nas regras.
 
 ## Rodando
 
 ```
-hexmp-server --insecure --resources rp-kit --resources resources --db sqlite:hexmp.db
+hexmp-server      # lê o hexmp.cfg da pasta atual: o servidor de exemplo
 hexmp-server --key server.key --resources rp-kit --db postgres://usuario:senha@localhost/hexmp
 ```
 
@@ -50,6 +54,20 @@ Um módulo novo segue o mesmo contrato: `exports.call("rp-core", "registerModule
 | `rp.inventory.get` | — | `{items, weight, maxWeight}` |
 | `rp.inventory.use` | `item` | quantidade restante |
 | `rp.inventory.give` | `playerId, item, quantidade` | `true` (até 3 m de distância) |
+
+## Eventos (cliente)
+
+Do servidor (`net.on`): `rp:characterLoaded(resumo)`, `rp:characterUnloaded`, `rp:money:changed({cash, bank})`, `rp:inventory:changed(inventário)`, `rp:money:received`, `rp:itemReceived`, `rp:itemUsed`.
+
+Para o `rp-hud` (`events.emit`, entre recursos do cliente):
+
+| Evento | Argumentos |
+|---|---|
+| `hud:notify` | `texto, "ok" \| "erro"?` |
+| `hud:prompt` | `RESOURCE_NAME, texto` (ou `nil` para tirar) |
+| `hud:point` | `id, {label, position}` (ou `nil` para tirar) |
+
+O `rp-hud` emite `hud:ready` quando reinicia: mande de novo o que estiver valendo.
 
 ## Exports (outros recursos)
 

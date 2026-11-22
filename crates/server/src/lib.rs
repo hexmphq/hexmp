@@ -19,6 +19,22 @@ use std::collections::HashMap;
 use std::time::{Duration, Instant};
 use transport::{ClientId, NetEvent, Transport};
 
+/// `hexmp.cfg` → argumentos: cada linha é uma opção sem os traços; `#` no começo comenta.
+pub fn config_args(text: &str) -> Vec<String> {
+    let mut args = Vec::new();
+    for line in text.trim_start_matches('\u{feff}').lines().map(str::trim) {
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+        let (name, value) = line.split_once(char::is_whitespace).unwrap_or((line, ""));
+        args.push(format!("--{name}"));
+        if !value.is_empty() {
+            args.push(value.trim().into());
+        }
+    }
+    args
+}
+
 #[derive(Debug, Clone)]
 pub struct ServerConfig {
     pub tick_rate: u32,
@@ -752,6 +768,22 @@ mod tests {
         }
         s.tick(Duration::ZERO);
         s
+    }
+
+    #[test]
+    fn config_file() {
+        let args =
+            config_args("\u{feff}# nota\r\ninsecure\r\n\n  resources  minha pasta \ndb sqlite:a#b");
+        assert_eq!(
+            args,
+            [
+                "--insecure",
+                "--resources",
+                "minha pasta",
+                "--db",
+                "sqlite:a#b"
+            ]
+        );
     }
 
     #[test]

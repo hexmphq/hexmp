@@ -3,7 +3,7 @@
 use hexmp_auth::{AccountStore, Identity, ServerKey, issue_token, read_token};
 use hexmp_db::Db;
 use hexmp_headless_bot::{Behavior, Bot};
-use hexmp_protocol::ScriptValue;
+use hexmp_protocol::{ScriptValue, Vec3};
 use hexmp_scripting::{EngineConfig, ScriptEngine};
 use hexmp_server::admin::AdminInbox;
 use hexmp_server::transport::{NetAuth, RenetTransport};
@@ -292,18 +292,109 @@ fn new_character(bots: &mut [Bot]) -> ScriptValue {
     id
 }
 
+/// Anda até lá e espera o servidor saber.
+fn walk_to(bots: &mut [Bot], x: f32, y: f32) {
+    let target = Vec3::new(x, y, 0.0);
+    bots[0].behavior = Behavior::GoTo {
+        target,
+        speed: 40.0,
+    };
+    assert!(pump(bots, Duration::from_secs(10), |b| b[0].position == target));
+    bots[0].behavior = Behavior::Idle;
+    pump(bots, Duration::from_millis(200), |_| false);
+}
+
+fn event<'a>(bot: &'a Bot, name: &str) -> Option<&'a [ScriptValue]> {
+    let found = bot.events.iter().rev().find(|(n, _)| n == name);
+    found.map(|(_, args)| args.as_slice())
+}
+
+#[test]
+fn delivery_job_pays_once_and_only_at_the_address() {
+    let db = temp_db("delivery");
+    let server = RunningServer::with_rp_kit(&db);
+    let mut bots = join(&server, "entregador", 4100);
+    let fail = |e: &str| Err(e.to_string());
+
+    assert_eq!(
+        call(&mut bots, "delivery.start", &[]),
+        fail("selecione um personagem")
+    );
+    new_character(&mut bots);
+    assert!(event(&bots[0], "rp:characterLoaded").is_some());
+    assert_eq!(
+        call(&mut bots, "delivery.start", &[]),
+        fail("você está longe do depósito")
+    );
+    assert_eq!(
+        call(&mut bots, "delivery.finish", &[]),
+        fail("você não está com um pacote")
+    );
+    walk_to(&mut bots, -12.0, 6.0);
+    let i = ok1(call(&mut bots, "delivery.start", &[]));
+    assert_eq!(
+        call(&mut bots, "delivery.start", &[]),
+        fail("você já está com um pacote")
+    );
+    // Entregar no depósito não paga.
+    assert_eq!(
+        call(&mut bots, "delivery.finish", &[]),
+        fail("você está longe do endereço")
+    );
+    let (x, y, pay) = match i {
+        ScriptValue::Number(1.0) => (60.0, 30.0, 57.0),
+        ScriptValue::Number(2.0) => (-70.0, 45.0, 54.0),
+        ScriptValue::Number(3.0) => (20.0, -60.0, 56.0),
+        ScriptValue::Number(4.0) => (-40.0, -50.0, 51.0),
+        other => panic!("{other:?}"),
+    };
+    walk_to(&mut bots, x, y);
+    assert_eq!(call(&mut bots, "delivery.finish", &[]), Ok(vec![n(pay)]));
+    assert_eq!(
+        call(&mut bots, "delivery.finish", &[]),
+        fail("você não está com um pacote")
+    );
+    let money = ok1(call(&mut bots, "rp.money.get", &[]));
+    assert_eq!(field(&money, "cash"), &n(500.0 + pay));
+    // A tela fica sabendo sem perguntar.
+    let told = event(&bots[0], "rp:money:changed").unwrap();
+    assert_eq!(told, [money]);
+
+    // Trocar de personagem larga o pacote.
+    walk_to(&mut bots, -12.0, 6.0);
+    ok1(call(&mut bots, "delivery.start", &[]));
+    assert_eq!(
+        call(&mut bots, "rp.characters.logout", &[]),
+        Ok(vec![ScriptValue::Bool(true)])
+    );
+    assert!(pump(&mut bots, Duration::from_secs(5), |b| {
+        event(&b[0], "rp:characterUnloaded").is_some()
+    }));
+    let current = call(&mut bots, "delivery.current", &[]).unwrap();
+    assert!(current.iter().all(|v| *v == ScriptValue::Nil));
+    assert_eq!(bots[0].stats.corrections, 1, "só a do personagem novo");
+}
+
 #[test]
 fn shop_over_the_network_with_rp_kit() {
     let db = temp_db("shop");
     let server = RunningServer::with_rp_kit(&db);
     let mut bots = join(&server, "cliente", 4000);
 
-    // Sem personagem não compra.
+    // De longe não compra; sem personagem também não.
+    assert_eq!(
+        call(&mut bots, "shop.buy", &[s("agua")]),
+        Err("você está longe da loja".into())
+    );
+    walk_to(&mut bots, 12.0, 6.0);
     assert_eq!(
         call(&mut bots, "shop.buy", &[s("agua")]),
         Err("personagem não carregado".into())
     );
     new_character(&mut bots);
+    pump(&mut bots, Duration::from_millis(2100), |_| false);
+    // O personagem nasce longe da loja.
+    walk_to(&mut bots, 12.0, 6.0);
 
     let money = ok1(call(&mut bots, "rp.money.get", &[]));
     assert_eq!(field(&money, "cash"), &n(500.0));
@@ -316,6 +407,8 @@ fn shop_over_the_network_with_rp_kit() {
         .events
         .iter()
         .any(|(name, _)| name == "shop:comprou")));
+    let bag = event(&bots[0], "rp:inventory:changed").unwrap();
+    assert_eq!(field(&bag[0], "weight"), &n(500.0));
 
     assert_eq!(
         call(&mut bots, "shop.buy", &[s("celular")]),
@@ -330,7 +423,8 @@ fn shop_over_the_network_with_rp_kit() {
         call(&mut bots, "shop.buy", &[s("lanche"), n(0.0)]),
         Ok(vec![n(480.0)])
     );
-    // Limite de 5 chamadas por 2 s (a 1ª, sem personagem, também conta).
+    // Limite de 5 chamadas por 2 s.
+    call(&mut bots, "shop.buy", &[s("foguete")]).unwrap_err();
     assert_eq!(
         call(&mut bots, "shop.buy", &[s("agua")]),
         Err("limite de chamadas excedido, tente mais tarde".into())
@@ -358,6 +452,7 @@ fn character_money_and_inventory_survive_restart() {
         let server = RunningServer::with_rp_kit(&db);
         let mut bots = join(&server, "persistente", 5000);
         char_id = new_character(&mut bots);
+        walk_to(&mut bots, 12.0, 6.0);
         assert_eq!(
             call(&mut bots, "shop.buy", &[s("lanche")]),
             Ok(vec![n(485.0)])

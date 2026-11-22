@@ -1,0 +1,25 @@
+/* Fundo transparente: a página fica por cima do jogo. */
+:root {
+  --night: rgba(7, 15, 36, .94); --panel: #0a142e; --text: #f0f6ff; --muted: #a3b4d6;
+  --line: #26427c; --cyan: #40daff; --coral: #ff7a68; --green: #48e2a0;
+}
+* { box-sizing: border-box; }
+[hidden] { display: none !important; }
+html, body { margin: 0; height: 100%; overflow: hidden; background: transparent; }
+body { font: 15px/1.4 "Segoe UI", system-ui, sans-serif; color: var(--text); user-select: none; }
+button {
+  font: inherit; color: var(--text); background: var(--panel); border: 1px solid var(--line);
+  border-radius: 8px; padding: 8px 14px; cursor: pointer;
+}
+button:hover, button:focus-visible { border-color: var(--cyan); outline: none; }
+button:disabled { opacity: .45; cursor: default; border-color: var(--line); }
+button.main { background: var(--cyan); border-color: var(--cyan); color: #050b1c; font-weight: 600; }
+
+#shop { position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%); width: 420px; background: var(--night); border: 1px solid var(--line); border-radius: 14px; padding: 20px; }
+h1 { font-size: 20px; font-weight: 600; margin: 0 0 8px; }
+ul { list-style: none; margin: 0; padding: 0; }
+li { display: flex; align-items: center; gap: 12px; padding: 8px 0; border-bottom: 1px solid rgba(38, 66, 124, .5); }
+li span { flex: 1; }
+li em { font-style: normal; color: var(--green); font-variant-numeric: tabular-nums; }
+li button { padding: 4px 12px; font-size: 14px; }
+footer { margin-top: 14px; color: var(--muted); font-size: 14px; }
