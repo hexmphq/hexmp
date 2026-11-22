@@ -168,3 +168,63 @@ fn restart_replaces_handlers() {
     let ui: Vec<_> = rt.drain_ui().into_iter().map(|m| m.data).collect();
     assert_eq!(ui, vec![ScriptValue::Number(2.0)]);
 }
+
+#[test]
+fn ui_focus_stacks_and_is_released() {
+    let mut rt = ClientRuntime::default();
+    let code = r#"net.on(RESOURCE_NAME, function(on) ui.focus(on) ui.send(ui.focused()) end)
+        events.on("uiFocusReleased", function(name)
+            if name == RESOURCE_NAME then ui.send("solto") end
+        end)"#;
+    start(&mut rt, "loja", code);
+    start(&mut rt, "chat", code);
+    let set = |rt: &mut ClientRuntime, name: &str, on: bool| {
+        rt.handle(&ServerMessage::Event {
+            name: name.into(),
+            args: Payload::from_values(&[ScriptValue::Bool(on)]),
+        });
+    };
+    let focus = |rt: &ClientRuntime| rt.ui_focus().unwrap_or_default();
+    assert_eq!(focus(&rt), "");
+    set(&mut rt, "loja", true);
+    set(&mut rt, "chat", true);
+    assert_eq!(focus(&rt), "chat", "o último pedido vence");
+    set(&mut rt, "loja", false);
+    assert_eq!(focus(&rt), "chat", "soltar o próprio não tira o do outro");
+    set(&mut rt, "loja", true);
+    set(&mut rt, "loja", false);
+    assert_eq!(focus(&rt), "chat", "volta para quem estava antes");
+    let ui: Vec<_> = rt.drain_ui().into_iter().map(|m| m.data).collect();
+    let want = [true, true, false, true, false];
+    assert_eq!(ui, want.map(ScriptValue::Bool));
+
+    // O jogador tira o foco: os scripts ficam sabendo.
+    set(&mut rt, "loja", true);
+    rt.drain_ui();
+    rt.set_ui_focus(Some("chat"));
+    assert_eq!(focus(&rt), "chat");
+    rt.set_ui_focus(Some("nao-existe"));
+    assert_eq!(focus(&rt), "");
+    let who: Vec<_> = rt.drain_ui().into_iter().map(|m| m.resource).collect();
+    assert_eq!(who, ["loja", "chat"]);
+
+    // Parar ou reiniciar solta.
+    set(&mut rt, "chat", true);
+    start(&mut rt, "chat", code);
+    assert_eq!(focus(&rt), "");
+
+    // Sem página não há o que focar, e um script que falha ao iniciar não deixa foco preso.
+    start(&mut rt, "falha", "ui.focus(true) error('x')");
+    assert_eq!(focus(&rt), "");
+    rt.handle(&ServerMessage::ResourceStart {
+        name: "sem".into(),
+        scripts: vec!["c.luau".into()],
+        ui_page: None,
+        files: vec![ResourceFile {
+            path: "c.luau".into(),
+            data: b"ui.focus(true)".to_vec(),
+        }],
+    });
+    assert_eq!(focus(&rt), "");
+    assert_eq!(rt.running(), ["loja", "chat"]);
+}

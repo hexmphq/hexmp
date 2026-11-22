@@ -9,7 +9,8 @@ declare RESOURCE_NAME: string
 
 declare events: {
     --- Evento local entre recursos do cliente.
-    --- Do runtime: "playerSpawned"(id), "resourceStart"(name), "resourceStop"(name).
+    --- Do runtime: "playerSpawned"(id), "resourceStart"(name), "resourceStop"(name),
+    --- "uiFocusReleased"(name): o jogador tirou o foco da página do recurso; feche o menu.
     on: (name: string, handler: (...Data) -> ()) -> (),
     emit: (name: string, ...Data) -> (),
 }
@@ -48,6 +49,11 @@ declare ui: {
     send: (data: Data) -> (),
     --- Responde a `hexmp.callback(name, data)` vindo da página. O retorno volta para ela.
     on: (name: string, handler: (data: Data) -> ...Data) -> (),
+    --- `true`: a página deste recurso passa a receber mouse e teclado, e o jogo não.
+    --- `false`: devolve a quem estava antes (outra página ou o jogo). Exige `ui_page`.
+    focus: (on: boolean) -> (),
+    --- A página deste recurso está com o input?
+    focused: () -> boolean,
 }
 
 declare util: {

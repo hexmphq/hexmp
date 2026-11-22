@@ -27,6 +27,12 @@ window.addEventListener("message", (e) => {
   }
 });
 
+// O script (ou o jogador) passou o teclado para esta página.
+window.addEventListener("focus", () => $("text").focus());
+window.addEventListener("keydown", (e) => {
+  if (e.key === "Escape" && window.hexmp) window.hexmp.callback("close", null);
+});
+
 $("ping").addEventListener("submit", (e) => {
   e.preventDefault();
   const text = $("text").value.trim();

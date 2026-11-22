@@ -13,6 +13,12 @@ ui.on("ping", function(data)
     return true
 end)
 
+-- Esc na página devolve o mouse e o teclado ao jogo.
+ui.on("close", function()
+    ui.focus(false)
+    return true
+end)
+
 events.on("playerSpawned", function(id)
     ui.send({ type = "ready", id = id })
 end)

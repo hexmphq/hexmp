@@ -76,6 +76,7 @@ fn main() {
     let start = Instant::now();
     let mut last = Instant::now();
     let mut written: Vec<String> = Vec::new();
+    let mut focus = None;
     loop {
         if seconds.is_some_and(|s| start.elapsed() >= Duration::from_secs(s)) {
             break;
@@ -86,6 +87,10 @@ fn main() {
 
         for msg in client.runtime.drain_ui() {
             println!("[ui {}] {}", msg.resource, show(&msg.data));
+        }
+        if client.runtime.ui_focus() != focus {
+            focus = client.runtime.ui_focus();
+            println!("[foco] {}", focus.as_deref().unwrap_or("jogo"));
         }
         if let Some(dir) = &ui_dir {
             for page in client.runtime.ui_pages() {

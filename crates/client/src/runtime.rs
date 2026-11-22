@@ -85,6 +85,8 @@ struct Shared {
     next_rpc: Cell<u32>,
     outgoing: RefCell<Vec<ClientMessage>>,
     ui_out: RefCell<Vec<UiMessage>>,
+    /// Recursos que pediram o input; o último é quem está com ele.
+    ui_focus: RefCell<Vec<Rc<str>>>,
     me: RefCell<Me>,
     players: RefCell<BTreeMap<PlayerId, String>>,
     errors: Cell<u64>,
@@ -135,6 +137,7 @@ impl Shared {
             }
             t.retain(|_, l| !l.is_empty());
         }
+        self.ui_focus.borrow_mut().retain(|r| &**r != resource);
         self.ui_handlers
             .borrow_mut()
             .retain(|(r, _), _| r != resource);
@@ -185,6 +188,7 @@ impl ClientRuntime {
                 next_rpc: Cell::new(1),
                 outgoing: RefCell::default(),
                 ui_out: RefCell::default(),
+                ui_focus: RefCell::default(),
                 me: RefCell::default(),
                 players: RefCell::default(),
                 errors: Cell::new(0),
@@ -346,6 +350,27 @@ impl ClientRuntime {
             .collect()
     }
 
+    /// Recurso cuja página recebe mouse e teclado (`ui.focus`); `None` = o jogo.
+    pub fn ui_focus(&self) -> Option<String> {
+        let focus = self.shared.ui_focus.borrow();
+        focus.last().map(|r| r.to_string())
+    }
+
+    /// O jogador (não o script) escolhe quem recebe o input. Quem perde o pedido recebe o
+    /// evento `uiFocusReleased`. Recurso sem página é ignorado.
+    pub fn set_ui_focus(&mut self, resource: Option<&str>) {
+        let new: Vec<Rc<str>> = self
+            .resources
+            .iter()
+            .filter(|r| r.ui_page.is_some() && Some(r.name.as_str()) == resource)
+            .map(|r| Rc::from(r.name.as_str()))
+            .collect();
+        let old = self.shared.ui_focus.replace(new.clone());
+        for r in old.iter().filter(|r| !new.contains(r)) {
+            self.emit("uiFocusReleased", &[ScriptValue::String(r.to_string())]);
+        }
+    }
+
     /// A página de UI de `resource` chamou o callback `name` (registrado com `ui.on`).
     pub fn ui_callback(
         &mut self,
@@ -394,7 +419,7 @@ impl ClientRuntime {
             _ => Ok(VmState::Continue),
         });
         let rname: Rc<str> = Rc::from(name);
-        install_api(&lua, &rname, s).map_err(|e| error_message(&e))?;
+        install_api(&lua, &rname, s, ui_page.is_some()).map_err(|e| error_message(&e))?;
         lua.sandbox(true).map_err(|e| error_message(&e))?;
 
         for path in scripts {
@@ -449,7 +474,12 @@ fn vec3_table(lua: &Lua, v: Vec3) -> mlua::Result<mlua::Table> {
     Ok(t)
 }
 
-fn install_api(lua: &Lua, resource: &Rc<str>, shared: &Rc<Shared>) -> mlua::Result<()> {
+fn install_api(
+    lua: &Lua,
+    resource: &Rc<str>,
+    shared: &Rc<Shared>,
+    has_ui: bool,
+) -> mlua::Result<()> {
     let g = lua.globals();
     g.set("RESOURCE_NAME", &**resource)?;
 
@@ -645,6 +675,27 @@ fn install_api(lua: &Lua, resource: &Rc<str>, shared: &Rc<Shared>) -> mlua::Resu
                 .insert((r.to_string(), name), Rc::new(handler(&r, lua, func)));
             Ok(())
         })?,
+    )?;
+    let (w, r) = (Rc::downgrade(shared), resource.clone());
+    ui.set(
+        "focus",
+        lua.create_function(move |_, on: bool| {
+            if !has_ui {
+                return Err(rt("ui.focus: o recurso não tem ui_page"));
+            }
+            let s = upgrade(&w)?;
+            let mut focus = s.ui_focus.borrow_mut();
+            focus.retain(|x| *x != r);
+            if on {
+                focus.push(r.clone());
+            }
+            Ok(())
+        })?,
+    )?;
+    let (w, r) = (Rc::downgrade(shared), resource.clone());
+    ui.set(
+        "focused",
+        lua.create_function(move |_, ()| Ok(upgrade(&w)?.ui_focus.borrow().last() == Some(&r)))?,
     )?;
     g.set("ui", ui)?;
 

@@ -64,6 +64,27 @@ window.addEventListener("message", (e) => console.log(e.data));
 window.hexmp.callback("nome", { qualquer: "dado" });
 ```
 
+#### Mouse e teclado
+
+```lua
+net.on("loja:abrir", function(itens)
+    ui.send({ type = "abrir", itens = itens })
+    ui.focus(true)
+end)
+
+ui.on("fechar", function()
+    ui.focus(false)
+    return true
+end)
+
+-- o jogador pode tirar o foco por conta própria
+events.on("uiFocusReleased", function(nome)
+    if nome == RESOURCE_NAME then ui.send({ type = "fechar" }) end
+end)
+```
+
+Vale o pedido mais recente. Quando ele é solto, o foco volta para o pedido anterior. Parar o recurso solta o foco. A página recebe os eventos `focus` e `blur` do `window`; se já nasce com o foco, só `document.hasFocus()` indica.
+
 A página fica por cima do jogo com fundo transparente. Ela não carrega nada de fora: tudo o que usa precisa estar em `files`.
 
 ### Testando sem o jogo
