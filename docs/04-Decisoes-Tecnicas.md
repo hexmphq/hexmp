@@ -504,6 +504,12 @@ Antes de lançar: busca de marca no INPI (classes 9 e 41) e registro de "HexM" s
 
 ---
 
+## Teclas do jogador
+
+A tela de teclas fica dentro do jogo (F7, reservada como a F8): é uma página do próprio cliente, com origem só dela, e quem captura a tecla é o cliente, não a página. As trocas ficam no computador do jogador, por servidor.
+
+---
+
 ## Estrutura de repositório
 
 > Visão lógica completa. Na prática fica dividida em **repositório público** e **privado** (ver Nome e domínios / Licenças).
