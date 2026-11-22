@@ -13,6 +13,13 @@ ui.on("ping", function(data)
     return true
 end)
 
+-- A tecla passa o mouse e o teclado para a página (o campo de mensagem).
+keys.bind("write", "F3", "Escrever no HUD", function(down)
+    if down then
+        ui.focus(true)
+    end
+end)
+
 -- Esc na página devolve o mouse e o teclado ao jogo.
 ui.on("close", function()
     ui.focus(false)

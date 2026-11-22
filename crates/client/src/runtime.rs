@@ -4,13 +4,14 @@
 //! e mensagens para a UI. Quem integra (o cliente do jogo, ou o `hexmp-client` headless)
 //! liga as pontas.
 
+use crate::keys;
 use hexmp_protocol::{
     ClientMessage, Payload, PlayerId, ResourceFile, ScriptValue, ServerMessage, Vec3,
 };
 use hexmp_scripting::value::{args_to_lua, args_to_script, error_message, to_script};
 use mlua::{Function, Lua, Value, Variadic, VmState};
 use std::cell::{Cell, RefCell};
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::rc::{Rc, Weak};
 use std::time::{Duration, Instant};
 
@@ -46,6 +47,28 @@ pub struct UiPage {
     pub files: Vec<ResourceFile>,
     /// Muda a cada vez que o recurso inicia: geração nova = recarregar a página.
     pub generation: u64,
+}
+
+/// Teclas por recurso; os nomes vêm do servidor, então há limite.
+const MAX_BINDINGS: usize = 32;
+const MAX_BINDING_TEXT: usize = 64;
+
+/// Tecla de um script, para a tela de configurações do jogador.
+#[derive(Debug, Clone, PartialEq)]
+pub struct KeyBinding {
+    pub resource: String,
+    pub id: String,
+    pub label: String,
+    pub key: String,
+}
+
+struct Binding {
+    id: String,
+    label: String,
+    key: u32,
+    default: u32,
+    down: bool,
+    handler: Rc<Handler>,
 }
 
 struct Handler {
@@ -87,6 +110,12 @@ struct Shared {
     ui_out: RefCell<Vec<UiMessage>>,
     /// Recursos que pediram o input; o último é quem está com ele.
     ui_focus: RefCell<Vec<Rc<str>>>,
+    /// O jogador travou o input no jogo: nenhuma página recebe foco.
+    ui_blocked: Cell<bool>,
+    bindings: RefCell<Vec<Binding>>,
+    /// Trocas feitas pelo jogador: (recurso, id) → tecla. Sobrevivem ao reinício do recurso.
+    custom_keys: RefCell<HashMap<(String, String), u32>>,
+    held: RefCell<HashSet<u32>>,
     me: RefCell<Me>,
     players: RefCell<BTreeMap<PlayerId, String>>,
     errors: Cell<u64>,
@@ -137,6 +166,9 @@ impl Shared {
             }
             t.retain(|_, l| !l.is_empty());
         }
+        self.bindings
+            .borrow_mut()
+            .retain(|b| &*b.handler.resource != resource);
         self.ui_focus.borrow_mut().retain(|r| &**r != resource);
         self.ui_handlers
             .borrow_mut()
@@ -189,6 +221,10 @@ impl ClientRuntime {
                 outgoing: RefCell::default(),
                 ui_out: RefCell::default(),
                 ui_focus: RefCell::default(),
+                ui_blocked: Cell::new(false),
+                bindings: RefCell::default(),
+                custom_keys: RefCell::default(),
+                held: RefCell::default(),
                 me: RefCell::default(),
                 players: RefCell::default(),
                 errors: Cell::new(0),
@@ -315,6 +351,7 @@ impl ClientRuntime {
                 .collect();
             ids.iter().filter_map(|id| rpcs.remove(id)).collect()
         };
+        self.sync_keys();
         for p in expired {
             if let Some(h) = p.handler {
                 s.call(
@@ -359,6 +396,7 @@ impl ClientRuntime {
     /// O jogador (não o script) escolhe quem recebe o input. Quem perde o pedido recebe o
     /// evento `uiFocusReleased`. Recurso sem página é ignorado.
     pub fn set_ui_focus(&mut self, resource: Option<&str>) {
+        let resource = resource.filter(|_| !self.shared.ui_blocked.get());
         let new: Vec<Rc<str>> = self
             .resources
             .iter()
@@ -369,6 +407,110 @@ impl ClientRuntime {
         for r in old.iter().filter(|r| !new.contains(r)) {
             self.emit("uiFocusReleased", &[ScriptValue::String(r.to_string())]);
         }
+    }
+
+    /// Trava (ou libera) o input no jogo: com trava, `ui.focus(true)` é recusado.
+    /// É a saída do jogador contra um servidor que não solta o input.
+    pub fn set_ui_blocked(&mut self, blocked: bool) {
+        self.shared.ui_blocked.set(blocked);
+        if blocked {
+            self.set_ui_focus(None);
+        }
+    }
+
+    pub fn ui_blocked(&self) -> bool {
+        self.shared.ui_blocked.get()
+    }
+
+    /// O host informa **toda** tecla (virtual-key code), mesmo com foco na UI. Scripts só
+    /// ficam sabendo das que pediram, e nunca do que o jogador digita numa página.
+    pub fn key(&mut self, code: u32, down: bool) {
+        let repeated = {
+            let mut held = self.shared.held.borrow_mut();
+            if down {
+                !held.insert(code)
+            } else {
+                held.remove(&code);
+                false
+            }
+        };
+        if repeated || (down && self.ui_focus().is_some()) {
+            return;
+        }
+        self.dispatch_keys(|b| b.key == code && b.down != down, down);
+        self.sync_keys();
+    }
+
+    /// O jogo perdeu o foco do Windows: as teclas contam como soltas.
+    pub fn release_keys(&mut self) {
+        self.shared.held.borrow_mut().clear();
+        self.dispatch_keys(|b| b.down, false);
+    }
+
+    /// Com o input numa página, o que estava pressionado conta como solto.
+    fn sync_keys(&self) {
+        if self.ui_focus().is_some() {
+            self.dispatch_keys(|b| b.down, false);
+        }
+    }
+
+    fn dispatch_keys(&self, pick: impl Fn(&Binding) -> bool, down: bool) {
+        let mut calls = Vec::new();
+        for b in self.shared.bindings.borrow_mut().iter_mut() {
+            if pick(b) {
+                b.down = down;
+                calls.push((b.handler.clone(), b.id.clone()));
+            }
+        }
+        for (h, id) in calls {
+            let what = format!("tecla `{id}`");
+            self.shared.call(&h, &what, &[ScriptValue::Bool(down)]);
+        }
+    }
+
+    pub fn key_bindings(&self) -> Vec<KeyBinding> {
+        let bindings = self.shared.bindings.borrow();
+        bindings
+            .iter()
+            .map(|b| KeyBinding {
+                resource: b.handler.resource.to_string(),
+                id: b.id.clone(),
+                label: b.label.clone(),
+                key: keys::name(b.key).unwrap_or_default(),
+            })
+            .collect()
+    }
+
+    /// O jogador troca a tecla de um recurso; `None` volta à padrão. `false` = tecla inválida.
+    pub fn set_key(&mut self, resource: &str, id: &str, key: Option<&str>) -> bool {
+        let code = key.and_then(keys::code);
+        if key.is_some() && code.is_none() {
+            return false;
+        }
+        let slot = (resource.to_string(), id.to_string());
+        let mine = |b: &Binding| &*b.handler.resource == resource && b.id == id;
+        self.dispatch_keys(|b| mine(b) && b.down, false);
+        {
+            let mut custom = self.shared.custom_keys.borrow_mut();
+            match code {
+                Some(c) => custom.insert(slot, c),
+                None => custom.remove(&slot),
+            };
+        }
+        for b in self.shared.bindings.borrow_mut().iter_mut() {
+            if mine(b) {
+                b.key = code.unwrap_or(b.default);
+            }
+        }
+        true
+    }
+
+    /// Para todos os recursos (saiu do servidor).
+    pub fn stop_all(&mut self) {
+        for name in self.running() {
+            self.stop(&name);
+        }
+        self.shared.outgoing.borrow_mut().clear();
     }
 
     /// A página de UI de `resource` chamou o callback `name` (registrado com `ui.on`).
@@ -686,10 +828,11 @@ fn install_api(
             let s = upgrade(&w)?;
             let mut focus = s.ui_focus.borrow_mut();
             focus.retain(|x| *x != r);
-            if on {
+            let granted = on && !s.ui_blocked.get();
+            if granted {
                 focus.push(r.clone());
             }
-            Ok(())
+            Ok(granted)
         })?,
     )?;
     let (w, r) = (Rc::downgrade(shared), resource.clone());
@@ -698,6 +841,51 @@ fn install_api(
         lua.create_function(move |_, ()| Ok(upgrade(&w)?.ui_focus.borrow().last() == Some(&r)))?,
     )?;
     g.set("ui", ui)?;
+
+    // keys: teclas do recurso, que o jogador pode trocar
+    let keys_table = lua.create_table()?;
+    let (w, r) = (Rc::downgrade(shared), resource.clone());
+    keys_table.set(
+        "bind",
+        lua.create_function(
+            move |lua, (id, key, label, func): (String, String, String, Function)| {
+                let s = upgrade(&w)?;
+                if id.is_empty() || id.len() > MAX_BINDING_TEXT || label.len() > MAX_BINDING_TEXT {
+                    return Err(rt("keys.bind: id ou descrição com tamanho inválido"));
+                }
+                let default = keys::code(&key)
+                    .ok_or_else(|| rt(&format!("keys.bind: tecla `{key}` não disponível")))?;
+                let custom = s.custom_keys.borrow();
+                let key = custom.get(&(r.to_string(), id.clone())).copied();
+                let binding = Binding {
+                    id,
+                    label,
+                    key: key.unwrap_or(default),
+                    default,
+                    down: false,
+                    handler: Rc::new(handler(&r, lua, func)),
+                };
+                let mut all = s.bindings.borrow_mut();
+                all.retain(|b| b.handler.resource != r || b.id != binding.id);
+                if all.iter().filter(|b| b.handler.resource == r).count() >= MAX_BINDINGS {
+                    return Err(rt("keys.bind: teclas demais no recurso"));
+                }
+                all.push(binding);
+                Ok(())
+            },
+        )?,
+    )?;
+    let (w, r) = (Rc::downgrade(shared), resource.clone());
+    keys_table.set(
+        "get",
+        lua.create_function(move |_, id: String| {
+            let s = upgrade(&w)?;
+            let all = s.bindings.borrow();
+            let found = all.iter().find(|b| b.handler.resource == r && b.id == id);
+            Ok(found.and_then(|b| keys::name(b.key)))
+        })?,
+    )?;
+    g.set("keys", keys_table)?;
 
     let util = lua.create_table()?;
     util.set(

@@ -3,7 +3,7 @@
 Definições de tipo para escrever recursos em Luau.
 
 - [`hexmp.d.luau`](hexmp.d.luau): API de **servidor** (`events`, `exports`, `rpc`, `timer`, `players`, `net`, `db`, `util`).
-- [`hexmp-client.d.luau`](hexmp-client.d.luau): API de **cliente** (`events`, `net.on`, `rpc.call`, `timer`, `me`, `players`, `ui`, `util`).
+- [`hexmp-client.d.luau`](hexmp-client.d.luau): API de **cliente** (`events`, `net.on`, `rpc.call`, `timer`, `me`, `players`, `ui`, `keys`, `util`).
 
 No VS Code com a extensão **luau-lsp**, adicione em `.vscode/settings.json`:
 
@@ -67,9 +67,12 @@ window.hexmp.callback("nome", { qualquer: "dado" });
 #### Mouse e teclado
 
 ```lua
-net.on("loja:abrir", function(itens)
-    ui.send({ type = "abrir", itens = itens })
-    ui.focus(true)
+-- F3 é só o padrão: o jogador pode trocar
+keys.bind("abrir", "F3", "Abrir a loja", function(down)
+    if down then
+        ui.send({ type = "abrir" })
+        ui.focus(true)
+    end
 end)
 
 ui.on("fechar", function()
@@ -82,6 +85,8 @@ events.on("uiFocusReleased", function(nome)
     if nome == RESOURCE_NAME then ui.send({ type = "fechar" }) end
 end)
 ```
+
+Um script só recebe as teclas que pediu, e nunca o que é digitado numa página. Esc e F8 não podem ser pedidas: **F8** trava o input no jogo (o servidor não consegue tomá-lo de volta até o jogador apertar de novo) e, segurada por 3 s, sai do servidor.
 
 Vale o pedido mais recente. Quando ele é solto, o foco volta para o pedido anterior. Parar o recurso solta o foco. A página recebe os eventos `focus` e `blur` do `window`; se já nasce com o foco, só `document.hasFocus()` indica.
 

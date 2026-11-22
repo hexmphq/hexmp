@@ -51,9 +51,20 @@ declare ui: {
     on: (name: string, handler: (data: Data) -> ...Data) -> (),
     --- `true`: a página deste recurso passa a receber mouse e teclado, e o jogo não.
     --- `false`: devolve a quem estava antes (outra página ou o jogo). Exige `ui_page`.
-    focus: (on: boolean) -> (),
+    --- Devolve `false` se não conseguiu (o jogador travou o input no jogo).
+    focus: (on: boolean) -> boolean,
     --- A página deste recurso está com o input?
     focused: () -> boolean,
+}
+
+declare keys: {
+    --- Avisa quando a tecla desce (`true`) e sobe (`false`). `id` identifica a ação para o
+    --- jogador trocar a tecla; `label` é o texto que ele vê. Nada chega com o input numa página.
+    --- Teclas: A-Z, 0-9, F1-F12 (menos F8), SPACE, ENTER, TAB, SHIFT, CTRL, ALT, setas
+    --- (UP, DOWN, LEFT, RIGHT), INSERT, DELETE, HOME, END, PAGEUP, PAGEDOWN, BACKSPACE, CAPSLOCK.
+    bind: (id: string, key: string, label: string, handler: (down: boolean) -> ()) -> (),
+    --- Tecla atual da ação, para mostrar na tela ("Aperte F3").
+    get: (id: string) -> string?,
 }
 
 declare util: {

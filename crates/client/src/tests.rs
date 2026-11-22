@@ -228,3 +228,99 @@ fn ui_focus_stacks_and_is_released() {
     assert_eq!(focus(&rt), "");
     assert_eq!(rt.running(), ["loja", "chat"]);
 }
+
+#[test]
+fn keys_reach_only_who_asked() {
+    let mut rt = ClientRuntime::default();
+    let code = r#"keys.bind("abrir", "F3", "Abrir", function(down)
+            ui.send((down and "v" or "^") .. keys.get("abrir"))
+        end)"#;
+    start(&mut rt, "loja", code);
+    let f = |n: &str| keys::code(n).unwrap();
+    let out = |rt: &mut ClientRuntime| -> Vec<String> {
+        let ui = rt.drain_ui();
+        ui.iter()
+            .map(|m| match &m.data {
+                ScriptValue::String(s) => s.clone(),
+                other => format!("{other:?}"),
+            })
+            .collect()
+    };
+    rt.key(f("F3"), true);
+    rt.key(f("F3"), true); // repetição
+    rt.key(f("A"), true);
+    rt.key(f("F3"), false);
+    assert_eq!(out(&mut rt), ["vF3", "^F3"]);
+
+    // Com o input numa página, nada chega; ao focar, o que estava pressionado solta.
+    rt.key(f("F3"), true);
+    rt.set_ui_focus(Some("loja"));
+    rt.tick(Duration::ZERO);
+    assert_eq!(out(&mut rt), ["vF3", "^F3"]);
+    rt.key(f("F3"), true);
+    rt.key(f("F3"), false);
+    assert!(out(&mut rt).is_empty());
+
+    // Tecla segurada desde a página não dispara ao voltar para o jogo.
+    rt.key(f("F3"), true);
+    rt.set_ui_focus(None);
+    rt.key(f("F3"), true);
+    assert!(out(&mut rt).is_empty());
+    rt.key(f("F3"), false);
+
+    // O jogador troca, e a troca sobrevive ao reinício.
+    assert!(!rt.set_key("loja", "abrir", Some("F8")), "reservada");
+    assert!(rt.set_key("loja", "abrir", Some("k")));
+    start(&mut rt, "loja", code);
+    assert_eq!(rt.key_bindings()[0].key, "K");
+    rt.key(f("K"), true);
+    rt.release_keys();
+    assert_eq!(out(&mut rt), ["vK", "^K"]);
+    assert!(rt.set_key("loja", "abrir", None));
+    assert_eq!(rt.key_bindings()[0].key, "F3");
+
+    // Recusas.
+    for bad in [
+        r#"keys.bind("x", "ESC", "", function() end)"#,
+        r#"keys.bind("x", "F8", "", function() end)"#,
+        r#"keys.bind("", "F1", "", function() end)"#,
+        r#"for i = 1, 33 do keys.bind("x" .. i, "F1", "", function() end) end"#,
+    ] {
+        start(&mut rt, "mau", bad);
+    }
+    assert_eq!(rt.running(), ["loja"]);
+    assert_eq!(
+        rt.key_bindings().len(),
+        1,
+        "recurso que falhou não deixa tecla"
+    );
+    rt.stop_all();
+    assert!(rt.key_bindings().is_empty() && rt.running().is_empty());
+}
+
+#[test]
+fn player_can_block_ui_focus() {
+    let mut rt = ClientRuntime::default();
+    // Pede de novo assim que perde.
+    start(
+        &mut rt,
+        "preso",
+        r#"ui.focus(true)
+           events.on("uiFocusReleased", function() ui.send(ui.focus(true)) end)"#,
+    );
+    rt.set_ui_focus(None);
+    assert_eq!(
+        rt.ui_focus().as_deref(),
+        Some("preso"),
+        "por isso existe a trava"
+    );
+    rt.drain_ui();
+    rt.set_ui_blocked(true);
+    assert_eq!(rt.ui_focus(), None);
+    assert_eq!(rt.drain_ui()[0].data, ScriptValue::Bool(false));
+    rt.set_ui_focus(Some("preso"));
+    assert_eq!(rt.ui_focus(), None);
+    rt.set_ui_blocked(false);
+    rt.set_ui_focus(Some("preso"));
+    assert!(rt.ui_focus().is_some());
+}

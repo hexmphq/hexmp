@@ -5,6 +5,7 @@
 //! callbacks da UI → [`ClientRuntime::ui_callback`].
 
 mod connection;
+pub mod keys;
 mod remotes;
 mod runtime;
 #[cfg(test)]
@@ -12,7 +13,7 @@ mod tests;
 
 pub use connection::Connection;
 pub use remotes::{DELAY as INTERPOLATION_DELAY, RemotePlayer};
-pub use runtime::{ClientRuntime, RuntimeConfig, UiMessage, UiPage};
+pub use runtime::{ClientRuntime, KeyBinding, RuntimeConfig, UiMessage, UiPage};
 
 use hexmp_protocol::{ClientMessage, PlayerId, ServerMessage, Vec3};
 use std::net::SocketAddr;
@@ -79,6 +80,10 @@ impl Client {
                 _ => {}
             }
             self.runtime.handle(&msg);
+        }
+        // Fora do servidor nada dele continua rodando (nem segurando o input).
+        if self.connection.is_disconnected() {
+            self.runtime.stop_all();
         }
         self.remotes.advance(dt);
         self.runtime.tick(dt);
