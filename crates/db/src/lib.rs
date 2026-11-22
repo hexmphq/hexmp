@@ -364,12 +364,36 @@ fn now_ms() -> i64 {
         .unwrap_or(0)
 }
 
+/// Uma migração por vez, mesmo com vários programas no mesmo banco. Solta no fim da transação.
+async fn migration_lock(
+    tx: &mut sqlx::Transaction<'_, Any>,
+    backend: Backend,
+) -> Result<(), String> {
+    sqlx::raw_sql(match backend {
+        // Número qualquer, sempre o mesmo.
+        Backend::Postgres => {
+            "DO $$ BEGIN PERFORM pg_advisory_xact_lock(7521849003114620517); END $$"
+        }
+        // Não muda nada, mas reserva a escrita antes de ler.
+        Backend::Sqlite => "UPDATE hexmp_migrations SET applied_at = applied_at WHERE 1 = 0",
+    })
+    .execute(&mut **tx)
+    .await
+    .map(|_| ())
+    .map_err(db_error)
+}
+
 async fn migrate(
     pool: &AnyPool,
-    _backend: Backend,
+    backend: Backend,
     resource: &str,
     files: &[(String, String)],
 ) -> DbResult {
+    let mut tx = pool.begin().await.map_err(db_error)?;
+    // No SQLite, criar a tabela já reserva a escrita.
+    if backend == Backend::Postgres {
+        migration_lock(&mut tx, backend).await?;
+    }
     sqlx::raw_sql(
         "CREATE TABLE IF NOT EXISTS hexmp_migrations (
             resource TEXT NOT NULL,
@@ -379,19 +403,22 @@ async fn migrate(
             PRIMARY KEY (resource, name)
         )",
     )
-    .execute(pool)
+    .execute(&mut *tx)
     .await
     .map_err(db_error)?;
+    tx.commit().await.map_err(db_error)?;
 
     let mut applied = Vec::new();
     for (name, sql) in files {
         let sum = checksum(sql);
+        let mut tx = pool.begin().await.map_err(db_error)?;
+        migration_lock(&mut tx, backend).await?;
         let existing: Option<String> = sqlx::query_scalar(
             "SELECT checksum FROM hexmp_migrations WHERE resource = $1 AND name = $2",
         )
         .bind(resource)
         .bind(name)
-        .fetch_optional(pool)
+        .fetch_optional(&mut *tx)
         .await
         .map_err(db_error)?;
         match existing {
@@ -403,7 +430,6 @@ async fn migrate(
             }
             None => {}
         }
-        let mut tx = pool.begin().await.map_err(db_error)?;
         // Arquivo de migração do próprio recurso, lido do disco do servidor.
         sqlx::raw_sql(AssertSqlSafe(sql.clone()))
             .execute(&mut *tx)

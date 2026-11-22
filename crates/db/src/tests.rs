@@ -298,3 +298,57 @@ fn bad_url_is_an_error() {
     assert!(Db::connect("mysql://x").is_err());
     assert!(Db::connect("sqlite:/caminho/que/nao/existe/x.db").is_err());
 }
+
+/// Vários programas abrindo um banco vazio ao mesmo tempo.
+fn migrate_together(url: &str) {
+    let start = std::sync::Barrier::new(8);
+    let applied: usize = std::thread::scope(|scope| {
+        let all: Vec<_> = (0..8)
+            .map(|_| {
+                scope.spawn(|| {
+                    let mut db = Db::connect(url).unwrap();
+                    let files = ["a", "b"].map(|t| {
+                        let sql = format!("CREATE TABLE juntos_{t} (id BIGINT PRIMARY KEY);");
+                        (format!("{t}.sql"), sql)
+                    });
+                    start.wait();
+                    let r = db.call(Request::Migrate {
+                        resource: "juntos".into(),
+                        files: files.to_vec(),
+                    });
+                    match r.unwrap() {
+                        Response::Migrated(names) => names.len(),
+                        other => panic!("{other:?}"),
+                    }
+                })
+            })
+            .collect();
+        all.into_iter().map(|t| t.join().unwrap()).sum()
+    });
+    assert_eq!(applied, 2);
+}
+
+#[test]
+fn concurrent_migrations_sqlite() {
+    for _ in 0..10 {
+        let file = std::env::temp_dir().join(format!("{}.db", unique("hexmp_juntos")));
+        migrate_together(&format!("sqlite:{}", file.display()));
+        let _ = std::fs::remove_file(&file);
+    }
+}
+
+#[test]
+fn concurrent_migrations_postgres() {
+    let Ok(url) = std::env::var("HEXMP_TEST_POSTGRES_URL") else {
+        return;
+    };
+    let mut db = Db::connect(&url).unwrap();
+    for _ in 0..10 {
+        // Um esquema novo faz as vezes do banco vazio.
+        let schema = unique("juntos");
+        let mut run = |sql: String| db.call(Request::Run(Statement::new(sql, vec![]))).unwrap();
+        run(format!("CREATE SCHEMA {schema}"));
+        migrate_together(&format!("{url}?options=-csearch_path%3D{schema}"));
+        run(format!("DROP SCHEMA {schema} CASCADE"));
+    }
+}
