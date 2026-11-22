@@ -201,6 +201,10 @@ impl ClientRuntime {
         self.shared.me.borrow().id
     }
 
+    pub fn player_name(&self, id: PlayerId) -> Option<String> {
+        self.shared.players.borrow().get(&id).cloned()
+    }
+
     /// O host informa a posição do jogador local (vem do jogo).
     pub fn set_local_position(&mut self, position: Vec3) {
         self.shared.me.borrow_mut().position = position;

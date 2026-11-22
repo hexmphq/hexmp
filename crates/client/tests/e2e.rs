@@ -135,3 +135,55 @@ fn client_scripts_ui_rpc_announce_and_restart() {
     stop.store(true, Ordering::Relaxed);
     server.join().unwrap();
 }
+
+#[test]
+fn two_clients_see_each_other_and_get_corrections() {
+    use hexmp_protocol::Vec3;
+    let stop = Arc::new(AtomicBool::new(false));
+    let (tx, rx) = std::sync::mpsc::channel();
+    let server = {
+        let stop = stop.clone();
+        std::thread::spawn(move || {
+            let transport =
+                RenetTransport::bind("127.0.0.1:0".parse().unwrap(), 8, NetAuth::Insecure).unwrap();
+            tx.send(transport.local_addr()).unwrap();
+            let mut server = GameServer::new(transport, ServerConfig::default());
+            server.run(|_| stop.load(Ordering::Relaxed));
+        })
+    };
+    let addr = rx.recv_timeout(Duration::from_secs(5)).unwrap();
+    let mut a = Client::connect_insecure(addr, "Ana", 1).unwrap();
+    let mut b = Client::connect_insecure(addr, "Bia", 2).unwrap();
+    let mut ui = Vec::new();
+    assert!(pump(&mut a, &mut ui, |c, _| c.player_id().is_some()));
+    assert_eq!(a.take_correction(), Some(Vec3::ZERO), "spawn");
+    assert_eq!(a.take_correction(), None);
+    assert!(pump(&mut b, &mut ui, |c, _| c.player_id().is_some()));
+
+    a.set_position(Vec3::new(2.0, 0.0, 0.0));
+    a.update(Duration::from_millis(1));
+    assert!(pump(&mut b, &mut ui, |c, _| {
+        c.remote_players()
+            .iter()
+            .any(|p| p.name == "Ana" && p.position.x == 2.0)
+    }));
+    assert_eq!(b.remote_players().len(), 1);
+
+    // Rápido demais: o servidor devolve a posição oficial.
+    a.set_position(Vec3::new(5000.0, 0.0, 0.0));
+    a.update(Duration::from_millis(1));
+    let mut corrected = None;
+    let start = Instant::now();
+    while corrected.is_none() && start.elapsed() < Duration::from_secs(5) {
+        a.update(Duration::from_millis(10));
+        corrected = a.take_correction();
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    assert_eq!(corrected, Some(Vec3::new(2.0, 0.0, 0.0)));
+
+    // Quem sai some.
+    a.disconnect();
+    assert!(pump(&mut b, &mut ui, |c, _| c.remote_players().is_empty()));
+    stop.store(true, Ordering::Relaxed);
+    server.join().unwrap();
+}

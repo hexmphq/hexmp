@@ -5,11 +5,13 @@
 //! callbacks da UI → [`ClientRuntime::ui_callback`].
 
 mod connection;
+mod remotes;
 mod runtime;
 #[cfg(test)]
 mod tests;
 
 pub use connection::Connection;
+pub use remotes::{DELAY as INTERPOLATION_DELAY, RemotePlayer};
 pub use runtime::{ClientRuntime, RuntimeConfig, UiMessage, UiPage};
 
 use hexmp_protocol::{ClientMessage, PlayerId, ServerMessage, Vec3};
@@ -21,6 +23,8 @@ pub struct Client {
     pub runtime: ClientRuntime,
     pub rejected: Option<String>,
     input_seq: u32,
+    remotes: remotes::Remotes,
+    correction: Option<Vec3>,
 }
 
 impl Client {
@@ -42,6 +46,8 @@ impl Client {
             runtime: ClientRuntime::default(),
             rejected: None,
             input_seq: 0,
+            remotes: Default::default(),
+            correction: None,
         }
     }
 
@@ -52,12 +58,29 @@ impl Client {
     /// Um quadro: recebe, roda scripts, envia.
     pub fn update(&mut self, dt: Duration) {
         for msg in self.connection.receive(dt) {
-            if let ServerMessage::Reject { reason } = &msg {
-                tracing::warn!("recusado: {reason}");
-                self.rejected = Some(reason.clone());
+            match &msg {
+                ServerMessage::Reject { reason } => {
+                    tracing::warn!("recusado: {reason}");
+                    self.rejected = Some(reason.clone());
+                }
+                ServerMessage::Welcome {
+                    tick_rate, spawn, ..
+                } => {
+                    self.remotes.reset(*tick_rate);
+                    self.correction = Some(*spawn);
+                }
+                ServerMessage::Correction { position } => self.correction = Some(*position),
+                ServerMessage::Snapshot { tick, entities } => {
+                    if let Some(me) = self.player_id() {
+                        self.remotes.push(*tick, entities, me);
+                    }
+                }
+                ServerMessage::PlayerLeft { id } => self.remotes.remove(*id),
+                _ => {}
             }
             self.runtime.handle(&msg);
         }
+        self.remotes.advance(dt);
         self.runtime.tick(dt);
         for msg in self.runtime.drain_outgoing() {
             self.connection.send(&msg);
@@ -75,6 +98,18 @@ impl Client {
                 position,
             });
         }
+    }
+
+    /// Jogadores visíveis, já interpolados para o quadro atual (sem o jogador local).
+    pub fn remote_players(&self) -> Vec<RemotePlayer> {
+        self.remotes
+            .list(|id| self.runtime.player_name(id).unwrap_or_default())
+    }
+
+    /// Posição imposta pelo servidor (spawn, correção, teleporte) desde a última chamada.
+    /// O host move o jogador para lá antes de mandar outra posição.
+    pub fn take_correction(&mut self) -> Option<Vec3> {
+        self.correction.take()
     }
 
     pub fn disconnect(&mut self) {
