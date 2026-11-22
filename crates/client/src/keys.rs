@@ -1,6 +1,7 @@
 //! Nomes das teclas que scripts podem pedir ↔ virtual-key code do Windows.
 //!
-//! Esc e F8 ficam fora de propósito: são do jogo e do cliente (recuperar o input e sair).
+//! Esc, F7 e F8 ficam fora de propósito: são do jogo e do cliente (tela de teclas, recuperar o
+//! input e sair).
 
 const NAMED: &[(&str, u32)] = &[
     ("BACKSPACE", 0x08),
@@ -27,7 +28,6 @@ const NAMED: &[(&str, u32)] = &[
     ("F4", 0x73),
     ("F5", 0x74),
     ("F6", 0x75),
-    ("F7", 0x76),
     ("F9", 0x78),
     ("F10", 0x79),
     ("F11", 0x7A),
@@ -65,7 +65,7 @@ mod tests {
             assert_eq!(code(n).and_then(name).as_deref(), Some(n));
         }
         assert_eq!(code("f3"), Some(0x72));
-        for n in ["", "ESC", "F8", "F13", "AB", "é"] {
+        for n in ["", "ESC", "F7", "F8", "F13", "AB", "é"] {
             assert_eq!(code(n), None, "{n}");
         }
         // 'p' minúsculo é o código de F1.

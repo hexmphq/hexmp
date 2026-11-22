@@ -60,7 +60,7 @@ declare ui: {
 declare keys: {
     --- Avisa quando a tecla desce (`true`) e sobe (`false`). `id` identifica a ação para o
     --- jogador trocar a tecla; `label` é o texto que ele vê. Nada chega com o input numa página.
-    --- Teclas: A-Z, 0-9, F1-F12 (menos F8), SPACE, ENTER, TAB, SHIFT, CTRL, ALT, setas
+    --- Teclas: A-Z, 0-9, F1-F12 (menos F7 e F8), SPACE, ENTER, TAB, SHIFT, CTRL, ALT, setas
     --- (UP, DOWN, LEFT, RIGHT), INSERT, DELETE, HOME, END, PAGEUP, PAGEDOWN, BACKSPACE, CAPSLOCK.
     bind: (id: string, key: string, label: string, handler: (down: boolean) -> ()) -> (),
     --- Tecla atual da ação, para mostrar na tela ("Aperte F3").

@@ -13,7 +13,7 @@ mod tests;
 
 pub use connection::Connection;
 pub use remotes::{DELAY as INTERPOLATION_DELAY, RemotePlayer};
-pub use runtime::{ClientRuntime, KeyBinding, RuntimeConfig, UiMessage, UiPage};
+pub use runtime::{ClientRuntime, CustomKey, KeyBinding, RuntimeConfig, UiMessage, UiPage};
 
 use hexmp_protocol::{ClientMessage, PlayerId, ServerMessage, Vec3};
 use std::net::SocketAddr;

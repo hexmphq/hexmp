@@ -86,7 +86,7 @@ events.on("uiFocusReleased", function(nome)
 end)
 ```
 
-Um script só recebe as teclas que pediu, e nunca o que é digitado numa página. Esc e F8 não podem ser pedidas: **F8** trava o input no jogo (o servidor não consegue tomá-lo de volta até o jogador apertar de novo) e, segurada por 3 s, sai do servidor.
+Um script só recebe as teclas que pediu, e nunca o que é digitado numa página. Esc, F7 e F8 não podem ser pedidas: **F7** abre a tela em que o jogador vê e troca as teclas (o `label` do `keys.bind` aparece nela; as trocas ficam salvas por servidor), e **F8** trava o input no jogo (o servidor não consegue tomá-lo de volta até o jogador apertar de novo) e, segurada por 3 s, sai do servidor.
 
 Vale o pedido mais recente. Quando ele é solto, o foco volta para o pedido anterior. Parar o recurso solta o foco. A página recebe os eventos `focus` e `blur` do `window`; se já nasce com o foco, só `document.hasFocus()` indica.
 

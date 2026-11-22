@@ -270,18 +270,26 @@ fn keys_reach_only_who_asked() {
 
     // O jogador troca, e a troca sobrevive ao reinício.
     assert!(!rt.set_key("loja", "abrir", Some("F8")), "reservada");
+    assert!(!rt.set_key("loja", "abrir", Some("F7")), "reservada");
     assert!(rt.set_key("loja", "abrir", Some("k")));
+    let custom = &rt.custom_keys()[0];
+    assert_eq!((&*custom.id, &*custom.key), ("abrir", "K"));
     start(&mut rt, "loja", code);
     assert_eq!(rt.key_bindings()[0].key, "K");
+    assert_eq!(rt.key_bindings()[0].default, "F3");
     rt.key(f("K"), true);
     rt.release_keys();
     assert_eq!(out(&mut rt), ["vK", "^K"]);
     assert!(rt.set_key("loja", "abrir", None));
     assert_eq!(rt.key_bindings()[0].key, "F3");
+    assert!(rt.custom_keys().is_empty());
+    start(&mut rt, ":hexm", code);
+    assert_eq!(rt.running(), ["loja"], "nome reservado");
 
     // Recusas.
     for bad in [
         r#"keys.bind("x", "ESC", "", function() end)"#,
+        r#"keys.bind("x", "F7", "", function() end)"#,
         r#"keys.bind("x", "F8", "", function() end)"#,
         r#"keys.bind("", "F1", "", function() end)"#,
         r#"for i = 1, 33 do keys.bind("x" .. i, "F1", "", function() end) end"#,

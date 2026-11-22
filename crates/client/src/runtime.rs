@@ -60,6 +60,16 @@ pub struct KeyBinding {
     pub id: String,
     pub label: String,
     pub key: String,
+    /// A que o script pediu.
+    pub default: String,
+}
+
+/// Troca feita pelo jogador.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub struct CustomKey {
+    pub resource: String,
+    pub id: String,
+    pub key: String,
 }
 
 struct Binding {
@@ -477,8 +487,26 @@ impl ClientRuntime {
                 id: b.id.clone(),
                 label: b.label.clone(),
                 key: keys::name(b.key).unwrap_or_default(),
+                default: keys::name(b.default).unwrap_or_default(),
             })
             .collect()
+    }
+
+    /// Trocas do jogador, inclusive de recursos parados, para o host guardar.
+    pub fn custom_keys(&self) -> Vec<CustomKey> {
+        let custom = self.shared.custom_keys.borrow();
+        let mut all: Vec<_> = custom
+            .iter()
+            .filter_map(|((resource, id), code)| {
+                Some(CustomKey {
+                    resource: resource.clone(),
+                    id: id.clone(),
+                    key: keys::name(*code)?,
+                })
+            })
+            .collect();
+        all.sort();
+        all
     }
 
     /// O jogador troca a tecla de um recurso; `None` volta à padrão. `false` = tecla inválida.
@@ -548,6 +576,10 @@ impl ClientRuntime {
         ui_page: Option<String>,
         files: &[ResourceFile],
     ) -> Result<(), String> {
+        // Nomes com `:` são das páginas do próprio cliente.
+        if name.starts_with(':') {
+            return Err("nome reservado".into());
+        }
         self.stop(name);
         let s = &self.shared;
         let lua = Lua::new();
