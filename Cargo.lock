@@ -645,6 +645,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "hexmp-client"
+version = "0.1.0"
+dependencies = [
+ "base64",
+ "hexmp-auth",
+ "hexmp-protocol",
+ "hexmp-scripting",
+ "hexmp-server",
+ "mlua",
+ "renet2",
+ "renet2_netcode",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
 name = "hexmp-db"
 version = "0.1.0"
 dependencies = [

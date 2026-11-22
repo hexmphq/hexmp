@@ -5,7 +5,7 @@
 use bitcode::{Decode, Encode};
 
 /// Versão do protocolo. Cliente e servidor precisam bater.
-pub const PROTOCOL_VERSION: u16 = 1;
+pub const PROTOCOL_VERSION: u16 = 2;
 
 /// Identificador do protocolo no netcode ("HEXM" + versão).
 /// Clientes de outro protocolo nem completam o handshake.
@@ -252,6 +252,17 @@ pub struct EntityState {
     pub position: Vec3,
 }
 
+/// Arquivo de um recurso enviado ao cliente (script ou asset da UI).
+#[derive(Debug, Clone, PartialEq, Encode, Decode)]
+pub struct ResourceFile {
+    /// Caminho relativo dentro do recurso, com `/`.
+    pub path: String,
+    pub data: Vec<u8>,
+}
+
+/// Limite do pacote de cliente de um recurso.
+pub const MAX_CLIENT_BUNDLE_BYTES: usize = 2 * 1024 * 1024;
+
 #[derive(Debug, Clone, PartialEq, Encode, Decode)]
 pub enum ServerMessage {
     Welcome {
@@ -287,6 +298,17 @@ pub enum ServerMessage {
     Event {
         name: String,
         args: Payload,
+    },
+    /// Recurso com parte de cliente iniciou (ou o jogador acabou de entrar).
+    /// `scripts` lista, em ordem de execução, quais `files` são scripts.
+    ResourceStart {
+        name: String,
+        scripts: Vec<String>,
+        ui_page: Option<String>,
+        files: Vec<ResourceFile>,
+    },
+    ResourceStop {
+        name: String,
     },
 }
 

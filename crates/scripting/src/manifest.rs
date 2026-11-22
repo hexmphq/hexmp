@@ -17,7 +17,17 @@ pub struct Manifest {
     pub client_scripts: Vec<String>,
     /// Arquivos `.sql` aplicados uma vez cada, em ordem, antes dos scripts.
     pub migrations: Vec<String>,
+    /// Página HTML da interface (NUI) deste recurso, também listada em `files`.
+    pub ui_page: Option<String>,
+    /// Assets enviados ao cliente (HTML, CSS, JS, imagens, fontes, sons).
+    pub files: Vec<String>,
 }
+
+/// Extensões aceitas em `files`.
+pub const CLIENT_FILE_EXTENSIONS: &[&str] = &[
+    ".html", ".css", ".js", ".json", ".png", ".jpg", ".jpeg", ".webp", ".svg", ".gif", ".woff",
+    ".woff2", ".ttf", ".ogg", ".mp3", ".wav",
+];
 
 pub fn parse(source: &str, chunk_name: &str) -> Result<Manifest, String> {
     let lua = Lua::new();
@@ -45,7 +55,14 @@ pub fn parse(source: &str, chunk_name: &str) -> Result<Manifest, String> {
         server_scripts: script_list(&env, "server_scripts")?,
         client_scripts: script_list(&env, "client_scripts")?,
         migrations: file_list(&env, "migrations", &[".sql"])?,
+        ui_page: opt_string(&env, "ui_page")?,
+        files: file_list(&env, "files", CLIENT_FILE_EXTENSIONS)?,
     };
+    if let Some(page) = &m.ui_page
+        && !m.files.contains(page)
+    {
+        return Err(format!("`ui_page` ({page}) precisa estar em `files`"));
+    }
     Ok(m)
 }
 
@@ -138,6 +155,18 @@ mod tests {
         assert!(parse(r#"server_scripts = { "/etc/passwd.luau" }"#, "x").is_err());
         assert!(parse(r#"server_scripts = { "a\\b.luau" }"#, "x").is_err());
         assert!(parse(r#"server_scripts = { "main.txt" }"#, "x").is_err());
+    }
+
+    #[test]
+    fn ui_page_must_be_listed_in_files() {
+        let m = parse(
+            r#"ui_page = "ui/index.html" files = { "ui/index.html", "ui/app.js" }"#,
+            "x",
+        )
+        .unwrap();
+        assert_eq!(m.ui_page.as_deref(), Some("ui/index.html"));
+        assert!(parse(r#"ui_page = "ui/index.html""#, "x").is_err());
+        assert!(parse(r#"files = { "ui/run.exe" }"#, "x").is_err());
     }
 
     #[test]

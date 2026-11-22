@@ -47,6 +47,8 @@ pub struct Bot {
     pub rpc_results: HashMap<u32, RpcResult>,
     /// Eventos recebidos (`net.emit`/`net.broadcast`), em ordem.
     pub events: Vec<(String, Vec<ScriptValue>)>,
+    /// Recursos com parte de cliente anunciados pelo servidor.
+    pub client_resources: Vec<String>,
     seq: u32,
     next_rpc: u32,
     elapsed: f32,
@@ -123,6 +125,7 @@ impl Bot {
             stats: BotStats::default(),
             rpc_results: HashMap::new(),
             events: Vec::new(),
+            client_resources: Vec::new(),
             seq: 0,
             next_rpc: 1,
             elapsed: 0.0,
@@ -240,6 +243,13 @@ impl Bot {
                     self.events.push((name, args));
                 }
             }
+            // O bot não roda scripts de cliente; só registra o que recebeu.
+            ServerMessage::ResourceStart { name, .. } => {
+                if !self.client_resources.contains(&name) {
+                    self.client_resources.push(name);
+                }
+            }
+            ServerMessage::ResourceStop { name } => self.client_resources.retain(|n| *n != name),
         }
     }
 

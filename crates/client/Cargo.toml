@@ -1,0 +1,22 @@
+[package]
+name = "hexmp-client"
+description = "Runtime de cliente do HexMP: conexão, recursos e scripts Luau (sem o jogo)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[dependencies]
+hexmp-protocol.workspace = true
+hexmp-scripting.workspace = true
+hexmp-auth.workspace = true
+mlua.workspace = true
+renet2.workspace = true
+renet2_netcode.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+base64.workspace = true
+
+[dev-dependencies]
+hexmp-server.workspace = true

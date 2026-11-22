@@ -10,7 +10,7 @@ pub mod manifest;
 pub mod value;
 
 use hexmp_db::{Db, Request, Ticket};
-use hexmp_protocol::{PlayerId, ScriptValue, Vec3};
+use hexmp_protocol::{MAX_CLIENT_BUNDLE_BYTES, PlayerId, ResourceFile, ScriptValue, Vec3};
 use manifest::{MANIFEST_FILE, Manifest};
 use mlua::{Function, Lua, Value, Variadic, VmState};
 use std::cell::{Cell, RefCell};
@@ -71,6 +71,14 @@ pub enum Command {
     Teleport {
         player: PlayerId,
         position: Vec3,
+    },
+    /// Recurso com parte de cliente iniciou: mande [`ScriptEngine::client_bundle`] a todos.
+    ResourceStarted {
+        name: String,
+    },
+    /// Recurso com parte de cliente parou.
+    ResourceStopped {
+        name: String,
     },
     /// Resposta de um RPC adiado com `rpc.defer()`.
     RpcReply {
@@ -218,6 +226,56 @@ struct Resource {
     manifest: Manifest,
     _lua: Lua,
     fingerprint: Fingerprint,
+    client: Option<Rc<ClientBundle>>,
+}
+
+/// O que o cliente recebe de um recurso: scripts (em ordem) e assets da UI.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ClientBundle {
+    pub scripts: Vec<String>,
+    pub ui_page: Option<String>,
+    pub files: Vec<ResourceFile>,
+}
+
+/// Lê do disco a parte de cliente. `None` se o recurso não tem scripts de cliente nem UI.
+fn read_client_bundle(dir: &Path, m: &Manifest) -> Result<Option<ClientBundle>, String> {
+    if m.client_scripts.is_empty() && m.ui_page.is_none() && m.files.is_empty() {
+        return Ok(None);
+    }
+    let scripts: Vec<String> = if m.client_scripts.is_empty() {
+        Vec::new()
+    } else {
+        m.shared_scripts
+            .iter()
+            .chain(&m.client_scripts)
+            .cloned()
+            .collect()
+    };
+    let mut files = Vec::new();
+    let mut total = 0usize;
+    let mut seen = HashSet::new();
+    for path in scripts.iter().chain(&m.files) {
+        if !seen.insert(path.clone()) {
+            continue;
+        }
+        let data = std::fs::read(dir.join(path)).map_err(|e| format!("{path}: {e}"))?;
+        total += data.len();
+        if total > MAX_CLIENT_BUNDLE_BYTES {
+            return Err(format!(
+                "parte de cliente passa de {} MB",
+                MAX_CLIENT_BUNDLE_BYTES / (1024 * 1024)
+            ));
+        }
+        files.push(ResourceFile {
+            path: path.clone(),
+            data,
+        });
+    }
+    Ok(Some(ClientBundle {
+        scripts,
+        ui_page: m.ui_page.clone(),
+        files,
+    }))
 }
 
 #[derive(Debug, Clone, PartialEq, Default)]
@@ -412,9 +470,16 @@ impl ScriptEngine {
         }
 
         let resource = self.load(name, dir, manifest)?;
+        let has_client = resource.client.is_some();
         self.running.push(resource);
         visiting.remove(name);
         tracing::info!(target: "script", resource = name, "iniciado");
+        if has_client {
+            self.shared
+                .outbox
+                .borrow_mut()
+                .push(Command::ResourceStarted { name: name.into() });
+        }
         self.emit("resourceStart", &[ScriptValue::String(name.into())]);
         Ok(())
     }
@@ -428,6 +493,9 @@ impl ScriptEngine {
         let fail = |e: mlua::Error| StartError::Script(name.into(), error_message(&e));
         let rname: Rc<str> = Rc::from(name);
         let fp = fingerprint(&dir);
+        let client = read_client_bundle(&dir, &manifest)
+            .map_err(|e| StartError::Script(name.into(), e))?
+            .map(Rc::new);
         let lua = Lua::new();
         lua.set_memory_limit(self.shared.config.memory_limit)
             .map_err(fail)?;
@@ -467,6 +535,7 @@ impl ScriptEngine {
             manifest,
             _lua: lua,
             fingerprint: fp,
+            client,
         })
     }
 
@@ -507,7 +576,13 @@ impl ScriptEngine {
         };
         self.emit("resourceStop", &[ScriptValue::String(name.into())]);
         self.shared.remove_resource(name);
-        self.running.remove(pos);
+        let removed = self.running.remove(pos);
+        if removed.client.is_some() {
+            self.shared
+                .outbox
+                .borrow_mut()
+                .push(Command::ResourceStopped { name: name.into() });
+        }
         tracing::info!(target: "script", resource = name, "parado");
         true
     }
@@ -776,6 +851,22 @@ impl ScriptEngine {
         if let Some(mut db) = db {
             db.shutdown();
         }
+    }
+
+    /// Parte de cliente de um recurso rodando.
+    pub fn client_bundle(&self, name: &str) -> Option<Rc<ClientBundle>> {
+        self.running
+            .iter()
+            .find(|r| &*r.name == name)
+            .and_then(|r| r.client.clone())
+    }
+
+    /// Partes de cliente de todos os recursos rodando, na ordem em que iniciaram.
+    pub fn client_bundles(&self) -> Vec<(String, Rc<ClientBundle>)> {
+        self.running
+            .iter()
+            .filter_map(|r| r.client.clone().map(|c| (r.name.to_string(), c)))
+            .collect()
     }
 
     pub fn drain_commands(&mut self) -> Vec<Command> {

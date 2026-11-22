@@ -342,6 +342,19 @@ impl<T: Transport> GameServer<T> {
                         self.send(client, &ServerMessage::Correction { position });
                     }
                 }
+                Command::ResourceStarted { name } => {
+                    if let Some(msg) = self
+                        .scripts
+                        .as_ref()
+                        .and_then(|e| e.client_bundle(&name))
+                        .map(|b| resource_start(&name, &b))
+                    {
+                        self.broadcast(&msg);
+                    }
+                }
+                Command::ResourceStopped { name } => {
+                    self.broadcast(&ServerMessage::ResourceStop { name });
+                }
                 Command::RpcReply {
                     player,
                     request,
@@ -542,6 +555,20 @@ impl<T: Transport> GameServer<T> {
             });
         }
 
+        // Recursos de cliente antes do Welcome: os scripts já estão de pé quando ele chega.
+        let bundles: Vec<ServerMessage> = self
+            .scripts
+            .as_ref()
+            .map(|e| {
+                e.client_bundles()
+                    .iter()
+                    .map(|(name, b)| resource_start(name, b))
+                    .collect()
+            })
+            .unwrap_or_default();
+        for msg in &bundles {
+            self.send(client, msg);
+        }
         self.send(
             client,
             &ServerMessage::Welcome {
@@ -638,6 +665,15 @@ impl<T: Transport> GameServer<T> {
         for c in clients {
             self.transport.send(c, msg.channel(), bytes.clone());
         }
+    }
+}
+
+fn resource_start(name: &str, b: &hexmp_scripting::ClientBundle) -> ServerMessage {
+    ServerMessage::ResourceStart {
+        name: name.into(),
+        scripts: b.scripts.clone(),
+        ui_page: b.ui_page.clone(),
+        files: b.files.clone(),
     }
 }
 
