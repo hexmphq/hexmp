@@ -356,7 +356,8 @@ fn markers_zones_and_camera() {
     let out = |rt: &mut ClientRuntime| -> Vec<ScriptValue> {
         rt.drain_ui().into_iter().map(|m| m.data).collect()
     };
-    let (yes, no) = (ScriptValue::Bool(true), ScriptValue::Bool(false));
+    const YES: &[ScriptValue] = &[ScriptValue::Bool(true)];
+    const NO: &[ScriptValue] = &[ScriptValue::Bool(false)];
     let tick = |rt: &mut ClientRuntime| rt.tick(Duration::ZERO);
     tick(&mut rt);
     assert!(out(&mut rt).is_empty(), "fora do mundo não há área");
@@ -366,14 +367,14 @@ fn markers_zones_and_camera() {
         spawn: Vec3::ZERO,
     });
     tick(&mut rt);
-    assert_eq!(out(&mut rt), [no.clone()], "a primeira conferência avisa");
+    assert_eq!(out(&mut rt), NO, "a primeira conferência avisa");
     rt.set_local_position(Vec3::new(4.0, 0.0, 0.0));
     tick(&mut rt);
     tick(&mut rt);
-    assert_eq!(out(&mut rt), [yes.clone()]);
+    assert_eq!(out(&mut rt), YES);
     rt.set_local_position(Vec3::ZERO);
     tick(&mut rt);
-    assert_eq!(out(&mut rt), [no]);
+    assert_eq!(out(&mut rt), NO);
 
     rt.set_camera_heading(-90.0);
     rt.set_camera_heading(f32::NAN);
@@ -381,7 +382,7 @@ fn markers_zones_and_camera() {
     assert_eq!(out(&mut rt), [ScriptValue::Number(270.0)]);
 
     rt.emit("tirar", &[]);
-    assert_eq!(out(&mut rt), [yes]);
+    assert_eq!(out(&mut rt), YES);
     assert_eq!(rt.take_markers(), Some(vec![]));
 
     // Recusas não deixam nada para trás; parar o recurso limpa.
