@@ -44,6 +44,8 @@ pub struct UiPage {
     pub resource: String,
     pub page: String,
     pub files: Vec<ResourceFile>,
+    /// Muda a cada vez que o recurso inicia: geração nova = recarregar a página.
+    pub generation: u64,
 }
 
 struct Handler {
@@ -151,12 +153,14 @@ struct Resource {
     name: String,
     ui_page: Option<String>,
     files: Vec<ResourceFile>,
+    generation: u64,
     _lua: Lua,
 }
 
 pub struct ClientRuntime {
     shared: Rc<Shared>,
     resources: Vec<Resource>,
+    starts: u64,
 }
 
 impl Default for ClientRuntime {
@@ -186,6 +190,7 @@ impl ClientRuntime {
                 errors: Cell::new(0),
             }),
             resources: Vec::new(),
+            starts: 0,
         }
     }
 
@@ -335,6 +340,7 @@ impl ClientRuntime {
                     resource: r.name.clone(),
                     page: page.clone(),
                     files: r.files.clone(),
+                    generation: r.generation,
                 })
             })
             .collect()
@@ -404,10 +410,12 @@ impl ClientRuntime {
                 return Err(format!("{path}: {}", error_message(&e)));
             }
         }
+        self.starts += 1;
         self.resources.push(Resource {
             name: name.into(),
             ui_page,
             files: files.to_vec(),
+            generation: self.starts,
             _lua: lua,
         });
         tracing::info!(target: "client-script", resource = name, "iniciado");

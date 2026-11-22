@@ -158,7 +158,9 @@ fn sandbox_and_limits() {
 fn restart_replaces_handlers() {
     let mut rt = ClientRuntime::default();
     start(&mut rt, "a", r#"net.on("e", function() ui.send(1) end)"#);
+    let before = rt.ui_pages()[0].generation;
     start(&mut rt, "a", r#"net.on("e", function() ui.send(2) end)"#);
+    assert_ne!(rt.ui_pages()[0].generation, before);
     rt.handle(&ServerMessage::Event {
         name: "e".into(),
         args: Payload::from_values(&[]),
