@@ -1,7 +1,11 @@
 //! Servidor dedicado do HexMP: conexão, entrada de jogadores, validação e replicação.
 
+pub mod admin;
+pub mod logs;
+pub mod panel;
 pub mod transport;
 
+use admin::{AdminCommand, AdminInbox, AdminReply, ResourceAction};
 use hexmp_auth::{Identity, ban_check, parse_ban};
 use hexmp_db::{Db, Request, Ticket};
 use hexmp_protocol::{
@@ -9,6 +13,7 @@ use hexmp_protocol::{
 };
 use hexmp_scripting::{Command, PlayerInfo, RpcOutcome, ScriptEngine, Target};
 use hexmp_sim::World;
+use serde_json::json;
 use std::collections::HashMap;
 use std::time::{Duration, Instant};
 use transport::{ClientId, NetEvent, Transport};
@@ -71,6 +76,8 @@ pub struct GameServer<T: Transport> {
     since_reload_check: Duration,
     /// Banco com a tabela `hexmp_bans` (o mesmo do `hexmp-auth`).
     bans: Option<Db>,
+    admin: Option<AdminInbox>,
+    started: Instant,
 }
 
 impl<T: Transport> GameServer<T> {
@@ -85,6 +92,8 @@ impl<T: Transport> GameServer<T> {
             scripts: None,
             since_reload_check: Duration::ZERO,
             bans: None,
+            admin: None,
+            started: Instant::now(),
         }
     }
 
@@ -97,6 +106,12 @@ impl<T: Transport> GameServer<T> {
     /// Confere bans no banco antes de deixar cada jogador entrar.
     pub fn with_bans(mut self, db: Db) -> Self {
         self.bans = Some(db);
+        self
+    }
+
+    /// Atende pedidos do painel a cada tick.
+    pub fn with_admin(mut self, inbox: AdminInbox) -> Self {
+        self.admin = Some(inbox);
         self
     }
 
@@ -130,6 +145,7 @@ impl<T: Transport> GameServer<T> {
         self.events = events;
 
         self.poll_bans();
+        self.handle_admin();
         self.kick_silent_clients();
         self.run_scripts(dt);
         self.world.step();
@@ -377,6 +393,104 @@ impl<T: Transport> GameServer<T> {
                 }
             }
             None => self.join(client, name, account),
+        }
+    }
+
+    fn handle_admin(&mut self) {
+        // Poucos por tick: o painel não pode atrasar o jogo.
+        for _ in 0..16 {
+            let Some(req) = self.admin.as_ref().and_then(|a| a.rx.try_recv().ok()) else {
+                return;
+            };
+            let reply = self.admin_command(req.command);
+            let _ = req.reply.send(reply);
+        }
+    }
+
+    fn admin_command(&mut self, cmd: AdminCommand) -> AdminReply {
+        match cmd {
+            AdminCommand::Status => Ok(json!({
+                "tick": self.world.tick,
+                "tickRate": self.config.tick_rate,
+                "uptimeSecs": self.started.elapsed().as_secs(),
+                "players": self.world.player_count(),
+                "connecting": self.sessions.values().filter(|s| s.player.is_none()).count(),
+                "secure": self.config.require_auth,
+                "bans": self.bans.is_some(),
+                "resourcesRunning": self.scripts.as_ref().map_or(0, |e| e.running().len()),
+                "scriptErrors": self.scripts.as_ref().map_or(0, |e| e.script_errors()),
+            })),
+            AdminCommand::Players => {
+                let mut list: Vec<_> = self
+                    .sessions
+                    .values()
+                    .filter_map(|s| {
+                        let id = s.player?;
+                        let p = self.world.player(id)?;
+                        Some(json!({
+                            "id": id,
+                            "name": p.name,
+                            "account": s.account,
+                            "position": { "x": p.position.x, "y": p.position.y, "z": p.position.z },
+                            "rejectedMoves": p.rejected_moves,
+                            "onlineSecs": s.connected_at.elapsed().as_secs(),
+                        }))
+                    })
+                    .collect();
+                list.sort_by_key(|p| p["id"].as_u64());
+                Ok(json!(list))
+            }
+            AdminCommand::Kick { player, reason } => {
+                let client = self
+                    .client_of(player)
+                    .ok_or_else(|| "jogador não está online".to_string())?;
+                self.reject(client, reason);
+                Ok(json!({ "ok": true }))
+            }
+            AdminCommand::Resources => {
+                let Some(engine) = &self.scripts else {
+                    return Ok(json!([]));
+                };
+                let list: Vec<_> = engine
+                    .available()
+                    .into_iter()
+                    .map(|name| {
+                        let m = engine.manifest(&name);
+                        json!({
+                            "name": name,
+                            "running": engine.is_running(&name),
+                            "version": m.map(|m| m.version.clone()),
+                            "description": m.map(|m| m.description.clone()),
+                        })
+                    })
+                    .collect();
+                Ok(json!(list))
+            }
+            AdminCommand::Resource { name, action } => {
+                let engine = self
+                    .scripts
+                    .as_mut()
+                    .ok_or_else(|| "scripts desligados".to_string())?;
+                if !engine.available().contains(&name) {
+                    return Err(format!("recurso `{name}` não existe"));
+                }
+                let result = match action {
+                    ResourceAction::Start => engine.start(&name).map_err(|e| e.to_string()),
+                    ResourceAction::Stop => {
+                        engine.stop(&name);
+                        Ok(())
+                    }
+                    ResourceAction::Restart => engine.restart(&name).map_err(|e| e.to_string()),
+                };
+                result.map(|()| json!({ "running": engine.is_running(&name) }))
+            }
+            AdminCommand::Announce { message } => {
+                self.broadcast(&ServerMessage::Event {
+                    name: "hexmp:announce".into(),
+                    args: Payload::from_values(&[hexmp_protocol::ScriptValue::String(message)]),
+                });
+                Ok(json!({ "ok": true }))
+            }
         }
     }
 

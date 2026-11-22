@@ -67,4 +67,4 @@ hexmp-auth ban NomeDoJogador --db sqlite:hexmp.db --reason "fraude"      # perma
 hexmp-auth unban NomeDoJogador --db sqlite:hexmp.db
 ```
 
-O ban vale no próximo login e na próxima entrada no servidor. Quem já está online não é expulso automaticamente; isso vem com o painel.
+O ban vale no próximo login e na próxima entrada no servidor. Pelo [painel](../packages/panel/README.md), o ban também expulsa na hora quem está online.

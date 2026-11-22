@@ -1,0 +1,411 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>HexMP Painel</title>
+<style>
+:root {
+  --bg: #f4f5f7; --surface: #ffffff; --surface-2: #eef0f3; --border: #dde1e6;
+  --text: #16181d; --muted: #5f6672; --accent: #5b3fd6; --accent-text: #ffffff;
+  --ok: #1d7a46; --warn: #a15c00; --bad: #b3261e; --mono: ui-monospace, "Cascadia Code", Consolas, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #0f1115; --surface: #171a20; --surface-2: #1e2229; --border: #2a2f38;
+    --text: #e7e9ee; --muted: #949bab; --accent: #8f7bff; --accent-text: #0f1115;
+    --ok: #4fc27f; --warn: #e0a23a; --bad: #f07167;
+  }
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--text); font: 14px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif; }
+button, input, select { font: inherit; color: inherit; }
+header { display: flex; align-items: center; gap: 16px; padding: 12px 20px; background: var(--surface); border-bottom: 1px solid var(--border); position: sticky; top: 0; z-index: 2; }
+header h1 { font-size: 16px; margin: 0; letter-spacing: .2px; }
+header .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--muted); display: inline-block; margin-right: 6px; }
+header .dot.on { background: var(--ok); }
+nav { display: flex; gap: 4px; margin-left: 8px; overflow-x: auto; }
+nav button { background: none; border: 0; padding: 6px 12px; border-radius: 6px; cursor: pointer; color: var(--muted); white-space: nowrap; }
+nav button[aria-selected="true"] { background: var(--surface-2); color: var(--text); }
+header .right { margin-left: auto; display: flex; gap: 8px; align-items: center; color: var(--muted); font-size: 13px; }
+main { max-width: 1200px; margin: 0 auto; padding: 20px; }
+.cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(170px, 1fr)); gap: 12px; margin-bottom: 20px; }
+.card { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 14px 16px; }
+.card .label { color: var(--muted); font-size: 12px; }
+.card .value { font-size: 22px; font-weight: 600; margin-top: 2px; font-variant-numeric: tabular-nums; }
+.panel { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; overflow: hidden; margin-bottom: 20px; }
+.panel h2 { font-size: 14px; margin: 0; padding: 12px 16px; border-bottom: 1px solid var(--border); display: flex; align-items: center; gap: 8px; }
+.panel h2 .count { color: var(--muted); font-weight: 400; }
+.table-wrap { overflow-x: auto; }
+table { width: 100%; border-collapse: collapse; }
+th, td { text-align: left; padding: 9px 16px; border-bottom: 1px solid var(--border); white-space: nowrap; }
+th { color: var(--muted); font-weight: 500; font-size: 12px; }
+tr:last-child td { border-bottom: 0; }
+td.mono { font-family: var(--mono); font-size: 12px; color: var(--muted); }
+td.actions { text-align: right; }
+.btn { border: 1px solid var(--border); background: var(--surface-2); border-radius: 6px; padding: 5px 10px; cursor: pointer; }
+.btn:hover { border-color: var(--muted); }
+.btn.primary { background: var(--accent); color: var(--accent-text); border-color: transparent; }
+.btn.danger { color: var(--bad); }
+.btn:disabled { opacity: .5; cursor: default; }
+.badge { display: inline-block; padding: 1px 8px; border-radius: 999px; font-size: 12px; background: var(--surface-2); color: var(--muted); }
+.badge.on { color: var(--ok); }
+.empty { padding: 28px 16px; color: var(--muted); text-align: center; }
+.logs { font-family: var(--mono); font-size: 12px; max-height: 60vh; overflow: auto; padding: 8px 0; }
+.logs div { padding: 1px 16px; white-space: pre-wrap; word-break: break-word; }
+.logs .t { color: var(--muted); }
+.logs .WARN { color: var(--warn); }
+.logs .ERROR { color: var(--bad); }
+.toolbar { display: flex; gap: 8px; padding: 10px 16px; border-bottom: 1px solid var(--border); flex-wrap: wrap; }
+input[type=text], input[type=password], input[type=number], select { background: var(--surface-2); border: 1px solid var(--border); border-radius: 6px; padding: 6px 10px; min-width: 0; }
+.login { max-width: 380px; margin: 12vh auto; padding: 24px; background: var(--surface); border: 1px solid var(--border); border-radius: 12px; }
+.login h1 { font-size: 18px; margin: 0 0 6px; }
+.login p { color: var(--muted); margin: 0 0 16px; }
+.login input { width: 100%; margin-bottom: 12px; }
+.err { color: var(--bad); min-height: 1.4em; }
+dialog { border: 1px solid var(--border); border-radius: 12px; background: var(--surface); color: var(--text); padding: 20px; width: min(420px, calc(100vw - 32px)); }
+dialog::backdrop { background: rgba(0,0,0,.45); }
+dialog h3 { margin: 0 0 12px; font-size: 16px; }
+dialog label { display: block; color: var(--muted); font-size: 12px; margin: 10px 0 4px; }
+dialog input { width: 100%; }
+dialog .row { display: flex; gap: 8px; justify-content: flex-end; margin-top: 18px; }
+#toast { position: fixed; bottom: 16px; left: 50%; transform: translateX(-50%); background: var(--text); color: var(--bg); padding: 8px 14px; border-radius: 8px; opacity: 0; transition: opacity .2s; pointer-events: none; max-width: calc(100vw - 32px); }
+#toast.show { opacity: 1; }
+[hidden] { display: none !important; }
+@media (max-width: 640px) {
+  header { flex-wrap: wrap; padding: 10px 16px; }
+  nav { order: 3; width: 100%; margin: 0; }
+  main { padding: 16px; }
+  th, td { padding: 8px 12px; }
+}
+</style>
+</head>
+<body>
+
+<section class="login" id="login" hidden>
+  <h1>HexMP Painel</h1>
+  <p>Cole a chave do arquivo <code>admin.key</code> do servidor.</p>
+  <form id="login-form">
+    <input type="password" id="key" autocomplete="off" placeholder="chave do painel" required>
+    <div class="err" id="login-err"></div>
+    <button class="btn primary" type="submit">Entrar</button>
+  </form>
+</section>
+
+<div id="app" hidden>
+  <header>
+    <h1><span class="dot" id="dot"></span>HexMP</h1>
+    <nav role="tablist">
+      <button role="tab" data-tab="overview" aria-selected="true">Visão geral</button>
+      <button role="tab" data-tab="players">Jogadores</button>
+      <button role="tab" data-tab="resources">Recursos</button>
+      <button role="tab" data-tab="logs">Logs</button>
+    </nav>
+    <div class="right"><span id="updated"></span><button class="btn" id="logout">Sair</button></div>
+  </header>
+
+  <main>
+    <section data-view="overview">
+      <div class="cards" id="cards"></div>
+      <div class="panel">
+        <h2>Anúncio para todos</h2>
+        <form class="toolbar" id="announce-form">
+          <input type="text" id="announce" maxlength="500" placeholder="Mensagem (evento hexmp:announce)" style="flex:1">
+          <button class="btn primary" type="submit">Enviar</button>
+        </form>
+      </div>
+    </section>
+
+    <section data-view="players" hidden>
+      <div class="panel">
+        <h2>Jogadores online <span class="count" id="players-count"></span></h2>
+        <div class="toolbar"><input type="text" id="player-filter" placeholder="Filtrar por nome ou conta" style="flex:1"></div>
+        <div class="table-wrap"><table>
+          <thead><tr><th>ID</th><th>Nome</th><th>Conta</th><th>Online</th><th>Posição</th><th>Mov. recusados</th><th></th></tr></thead>
+          <tbody id="players"></tbody>
+        </table></div>
+        <div class="empty" id="players-empty" hidden>Ninguém online.</div>
+      </div>
+    </section>
+
+    <section data-view="resources" hidden>
+      <div class="panel">
+        <h2>Recursos <span class="count" id="resources-count"></span></h2>
+        <div class="table-wrap"><table>
+          <thead><tr><th>Nome</th><th>Estado</th><th>Versão</th><th>Descrição</th><th></th></tr></thead>
+          <tbody id="resources"></tbody>
+        </table></div>
+        <div class="empty" id="resources-empty" hidden>Nenhum recurso encontrado.</div>
+      </div>
+    </section>
+
+    <section data-view="logs" hidden>
+      <div class="panel">
+        <h2>Logs</h2>
+        <div class="toolbar">
+          <select id="log-level">
+            <option value="">Todos os níveis</option>
+            <option value="WARN">Avisos e erros</option>
+            <option value="ERROR">Só erros</option>
+          </select>
+          <input type="text" id="log-filter" placeholder="Filtrar texto" style="flex:1">
+          <label style="display:flex;gap:6px;align-items:center;color:var(--muted)"><input type="checkbox" id="log-follow" checked> Acompanhar</label>
+        </div>
+        <div class="logs" id="logs"></div>
+      </div>
+    </section>
+  </main>
+</div>
+
+<dialog id="action-dialog">
+  <form method="dialog" id="action-form">
+    <h3 id="action-title"></h3>
+    <label for="action-reason">Motivo</label>
+    <input type="text" id="action-reason" maxlength="200" placeholder="Mostrado ao jogador">
+    <div id="hours-row">
+      <label for="action-hours">Duração em horas (vazio = permanente)</label>
+      <input type="number" id="action-hours" min="0.1" step="0.1">
+    </div>
+    <div class="err" id="action-err"></div>
+    <div class="row">
+      <button class="btn" value="cancel" formnovalidate>Cancelar</button>
+      <button class="btn primary danger" id="action-confirm" value="ok">Confirmar</button>
+    </div>
+  </form>
+</dialog>
+
+<div id="toast" role="status"></div>
+
+<script>
+"use strict";
+const $ = (id) => document.getElementById(id);
+const KEY = "hexmp-panel-key";
+let key = "";
+try { key = sessionStorage.getItem(KEY) || ""; } catch (_) {}
+let tab = "overview";
+let logSeq = 0;
+let logLines = [];
+let players = [];
+let timer = null;
+
+function el(tag, props, ...children) {
+  const e = document.createElement(tag);
+  Object.assign(e, props || {});
+  for (const c of children) e.append(c);
+  return e;
+}
+
+function toast(msg) {
+  const t = $("toast");
+  t.textContent = msg;
+  t.classList.add("show");
+  clearTimeout(toast.h);
+  toast.h = setTimeout(() => t.classList.remove("show"), 2600);
+}
+
+async function api(path, body) {
+  const res = await fetch("/api/" + path, {
+    method: body === undefined ? "GET" : "POST",
+    headers: { "Authorization": "Bearer " + key, "Content-Type": "application/json" },
+    body: body === undefined ? undefined : JSON.stringify(body),
+  });
+  const data = await res.json().catch(() => ({}));
+  if (res.status === 401) { logout(); throw new Error(data.error || "chave inválida"); }
+  if (!res.ok) throw new Error(data.error || ("erro " + res.status));
+  return data;
+}
+
+function duration(secs) {
+  const h = Math.floor(secs / 3600), m = Math.floor(secs % 3600 / 60), s = secs % 60;
+  return h ? `${h}h ${m}min` : m ? `${m}min ${s}s` : `${s}s`;
+}
+
+function setOnline(on) {
+  $("dot").classList.toggle("on", on);
+  $("updated").textContent = on ? "atualizado " + new Date().toLocaleTimeString() : "sem conexão";
+}
+
+async function refreshOverview() {
+  const s = await api("status");
+  const items = [
+    ["Jogadores", s.players],
+    ["Conectando", s.connecting],
+    ["Tempo no ar", duration(s.uptimeSecs)],
+    ["Tick", `${s.tick} @ ${s.tickRate} Hz`],
+    ["Recursos ativos", s.resourcesRunning],
+    ["Erros de script", s.scriptErrors],
+    ["Autenticação", s.secure ? "ativa" : "INSEGURO"],
+    ["Bans", s.bans ? "ativos" : s.secure ? "sem banco" : "desligados"],
+  ];
+  $("cards").replaceChildren(...items.map(([label, value]) =>
+    el("div", { className: "card" }, el("div", { className: "label", textContent: label }), el("div", { className: "value", textContent: String(value) }))));
+}
+
+function renderPlayers() {
+  const q = $("player-filter").value.trim().toLowerCase();
+  const list = players.filter(p => !q || p.name.toLowerCase().includes(q) || String(p.account).toLowerCase().includes(q));
+  $("players-count").textContent = `(${players.length})`;
+  $("players-empty").hidden = list.length > 0;
+  $("players").replaceChildren(...list.map(p => {
+    const pos = `${p.position.x.toFixed(1)}, ${p.position.y.toFixed(1)}, ${p.position.z.toFixed(1)}`;
+    return el("tr", {},
+      el("td", { textContent: p.id }),
+      el("td", { textContent: p.name }),
+      el("td", { className: "mono", textContent: p.account || "" }),
+      el("td", { textContent: duration(p.onlineSecs) }),
+      el("td", { className: "mono", textContent: pos }),
+      el("td", { textContent: p.rejectedMoves }),
+      el("td", { className: "actions" },
+        el("button", { className: "btn", textContent: "Expulsar", onclick: () => askAction("kick", p) }), " ",
+        el("button", { className: "btn danger", textContent: "Banir", onclick: () => askAction("ban", p) })));
+  }));
+}
+
+async function refreshPlayers() {
+  players = await api("players");
+  renderPlayers();
+}
+
+async function refreshResources() {
+  const list = await api("resources");
+  $("resources-count").textContent = `(${list.filter(r => r.running).length}/${list.length} ativos)`;
+  $("resources-empty").hidden = list.length > 0;
+  $("resources").replaceChildren(...list.map(r => {
+    const act = (action, label, cls) => el("button", {
+      className: "btn " + (cls || ""), textContent: label,
+      onclick: async (ev) => {
+        ev.target.disabled = true;
+        try { await api(`resources/${encodeURIComponent(r.name)}/${action}`, {}); toast(`${r.name}: ${label.toLowerCase()} ok`); }
+        catch (e) { toast(`${r.name}: ${e.message}`); }
+        refreshResources().catch(() => {});
+      },
+    });
+    return el("tr", {},
+      el("td", { textContent: r.name }),
+      el("td", {}, el("span", { className: "badge" + (r.running ? " on" : ""), textContent: r.running ? "rodando" : "parado" })),
+      el("td", { className: "mono", textContent: r.version || "" }),
+      el("td", { textContent: r.description || "" }),
+      el("td", { className: "actions" }, r.running
+        ? el("span", {}, act("restart", "Reiniciar"), " ", act("stop", "Parar", "danger"))
+        : act("start", "Iniciar", "primary")));
+  }));
+}
+
+function renderLogs() {
+  const level = $("log-level").value;
+  const q = $("log-filter").value.trim().toLowerCase();
+  const rank = { ERROR: 0, WARN: 1, INFO: 2 };
+  const box = $("logs");
+  const lines = logLines.filter(l =>
+    (!level || rank[l.level] <= rank[level]) &&
+    (!q || l.message.toLowerCase().includes(q) || l.target.toLowerCase().includes(q)));
+  box.replaceChildren(...lines.map(l => el("div", { className: l.level },
+    el("span", { className: "t", textContent: new Date(l.time).toLocaleTimeString() + " " + l.level.padEnd(5) + " " }),
+    `${l.target}: ${l.message}`)));
+  if ($("log-follow").checked) box.scrollTop = box.scrollHeight;
+}
+
+async function refreshLogs() {
+  const fresh = await api("logs?after=" + logSeq);
+  if (fresh.length) {
+    logSeq = fresh[fresh.length - 1].seq + 1;
+    logLines = logLines.concat(fresh).slice(-2000);
+    renderLogs();
+  }
+}
+
+const refreshers = { overview: refreshOverview, players: refreshPlayers, resources: refreshResources, logs: refreshLogs };
+
+async function refresh() {
+  try { await refreshers[tab](); setOnline(true); }
+  catch (e) { setOnline(false); }
+}
+
+function show(name) {
+  tab = name;
+  document.querySelectorAll("nav button").forEach(b => b.setAttribute("aria-selected", String(b.dataset.tab === name)));
+  document.querySelectorAll("[data-view]").forEach(v => v.hidden = v.dataset.view !== name);
+  try { localStorage.setItem("hexmp-panel-tab", name); } catch (_) {}
+  refresh();
+}
+
+let pending = null;
+function askAction(kind, player) {
+  pending = { kind, player };
+  $("action-title").textContent = (kind === "ban" ? "Banir " : "Expulsar ") + player.name;
+  $("hours-row").hidden = kind !== "ban";
+  $("action-reason").value = "";
+  $("action-hours").value = "";
+  $("action-err").textContent = "";
+  $("action-confirm").textContent = kind === "ban" ? "Banir" : "Expulsar";
+  $("action-dialog").showModal();
+  $("action-reason").focus();
+}
+
+$("action-form").addEventListener("submit", async (ev) => {
+  if (ev.submitter && ev.submitter.value === "cancel") return;
+  ev.preventDefault();
+  const { kind, player } = pending;
+  const body = { reason: $("action-reason").value };
+  const hours = $("action-hours").value;
+  if (kind === "ban" && hours) body.hours = Number(hours);
+  try {
+    await api(`players/${player.id}/${kind}`, body);
+    $("action-dialog").close();
+    toast(kind === "ban" ? `${player.name} banido` : `${player.name} expulso`);
+    refreshPlayers().catch(() => {});
+  } catch (e) {
+    $("action-err").textContent = e.message;
+  }
+});
+
+$("announce-form").addEventListener("submit", async (ev) => {
+  ev.preventDefault();
+  const message = $("announce").value.trim();
+  if (!message) return;
+  try { await api("announce", { message }); $("announce").value = ""; toast("Anúncio enviado"); }
+  catch (e) { toast(e.message); }
+});
+
+$("player-filter").addEventListener("input", renderPlayers);
+$("log-level").addEventListener("change", renderLogs);
+$("log-filter").addEventListener("input", renderLogs);
+document.querySelectorAll("nav button").forEach(b => b.addEventListener("click", () => show(b.dataset.tab)));
+
+function logout() {
+  key = "";
+  try { sessionStorage.removeItem(KEY); } catch (_) {}
+  clearInterval(timer);
+  $("app").hidden = true;
+  $("login").hidden = false;
+  $("key").focus();
+}
+$("logout").addEventListener("click", logout);
+
+$("login-form").addEventListener("submit", async (ev) => {
+  ev.preventDefault();
+  key = $("key").value.trim();
+  $("login-err").textContent = "";
+  try {
+    await api("status");
+    try { sessionStorage.setItem(KEY, key); } catch (_) {}
+    start();
+  } catch (e) {
+    $("login-err").textContent = e.message;
+  }
+});
+
+function start() {
+  $("login").hidden = true;
+  $("app").hidden = false;
+  let saved = "overview";
+  try { saved = localStorage.getItem("hexmp-panel-tab") || "overview"; } catch (_) {}
+  show(refreshers[saved] ? saved : "overview");
+  clearInterval(timer);
+  timer = setInterval(refresh, 2000);
+}
+
+if (key) start(); else { $("login").hidden = false; $("key").focus(); }
+</script>
+</body>
+</html>

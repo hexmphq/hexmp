@@ -5,6 +5,7 @@ use hexmp_db::Db;
 use hexmp_headless_bot::{Behavior, Bot};
 use hexmp_protocol::ScriptValue;
 use hexmp_scripting::{EngineConfig, ScriptEngine};
+use hexmp_server::admin::AdminInbox;
 use hexmp_server::transport::{NetAuth, RenetTransport};
 use hexmp_server::{GameServer, ServerConfig};
 use std::path::PathBuf;
@@ -22,12 +23,12 @@ struct RunningServer {
 
 impl RunningServer {
     fn start() -> Self {
-        Self::start_with(Vec::new(), None, None)
+        Self::start_with(Vec::new(), None, None, None)
     }
 
     /// Modo seguro, sem scripts; com `db`, confere bans.
     fn start_secure(db: Option<String>) -> Self {
-        Self::start_with(Vec::new(), db, Some(ServerKey::generate()))
+        Self::start_with(Vec::new(), db, Some(ServerKey::generate()), None)
     }
 
     /// Servidor seguro com rp-kit + exemplos do repositório, gravando no SQLite `db`.
@@ -37,10 +38,16 @@ impl RunningServer {
             vec![repo.join("rp-kit"), repo.join("resources")],
             Some(db.to_string()),
             Some(ServerKey::generate()),
+            None,
         )
     }
 
-    fn start_with(roots: Vec<PathBuf>, db: Option<String>, key: Option<ServerKey>) -> Self {
+    fn start_with(
+        roots: Vec<PathBuf>,
+        db: Option<String>,
+        key: Option<ServerKey>,
+        admin: Option<AdminInbox>,
+    ) -> Self {
         let stop = Arc::new(AtomicBool::new(false));
         let (tx, rx) = mpsc::channel();
         let stop_flag = stop.clone();
@@ -60,6 +67,9 @@ impl RunningServer {
                 ..ServerConfig::default()
             };
             let mut server = GameServer::new(transport, config);
+            if let Some(inbox) = admin {
+                server = server.with_admin(inbox);
+            }
             if key.is_some()
                 && let Some(url) = &db
             {
@@ -465,4 +475,145 @@ fn same_account_twice_drops_the_older_session() {
         bots[0].rejected.as_deref(),
         Some("conta conectada em outro lugar")
     );
+}
+
+fn http(
+    addr: std::net::SocketAddr,
+    method: &str,
+    path: &str,
+    key: &str,
+    body: &str,
+) -> (u16, String) {
+    use std::io::{Read, Write};
+    let mut s = std::net::TcpStream::connect(addr).unwrap();
+    write!(
+        s,
+        "{method} {path} HTTP/1.1\r\nHost: x\r\nAuthorization: Bearer {key}\r\n\
+         Content-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+        body.len()
+    )
+    .unwrap();
+    let mut out = String::new();
+    s.read_to_string(&mut out).unwrap();
+    let status = out[9..12].parse().unwrap();
+    let body = out
+        .split_once("\r\n\r\n")
+        .map(|(_, b)| b.to_string())
+        .unwrap_or_default();
+    (status, body)
+}
+
+#[test]
+fn panel_lists_kicks_bans_and_announces() {
+    use hexmp_server::logs::LogBuffer;
+    use hexmp_server::panel::PanelServer;
+
+    let db = temp_db("panel");
+    let mut store = AccountStore::open(&db).unwrap();
+    let identity = store.register("Alvo", "senha-forte-123").unwrap();
+
+    let (handle, inbox) = hexmp_server::admin::channel();
+    let server = RunningServer::start_with(
+        Vec::new(),
+        Some(db.clone()),
+        Some(ServerKey::generate()),
+        Some(inbox),
+    );
+    let key = "k".repeat(64);
+    let panel = Arc::new(
+        PanelServer::bind(
+            "127.0.0.1:0".parse().unwrap(),
+            handle,
+            LogBuffer::new(),
+            key.clone(),
+            Some(AccountStore::open(&db).unwrap()),
+        )
+        .unwrap(),
+    );
+    let paddr = panel.local_addr().unwrap();
+    let stop = Arc::new(AtomicBool::new(false));
+    let panel_thread = {
+        let (panel, stop) = (panel.clone(), stop.clone());
+        std::thread::spawn(move || panel.run(&stop))
+    };
+
+    // Página aberta, API fechada sem chave.
+    let (status, page) = http(paddr, "GET", "/", "", "");
+    assert_eq!(status, 200);
+    assert!(page.contains("HexMP Painel"));
+    assert_eq!(http(paddr, "GET", "/api/status", "errada", "").0, 401);
+
+    let mut bots = vec![server.bot_as(&identity, 9000)];
+    assert!(pump(&mut bots, Duration::from_secs(10), |b| b[0]
+        .player_id
+        .is_some()));
+    let pid = bots[0].player_id.unwrap();
+
+    let (status, body) = http(paddr, "GET", "/api/status", &key, "");
+    assert_eq!(status, 200, "{body}");
+    assert!(body.contains("\"players\":1"), "{body}");
+    let (_, body) = http(paddr, "GET", "/api/players", &key, "");
+    assert!(body.contains(&identity.account), "{body}");
+
+    // Anúncio chega no cliente.
+    let (status, _) = http(
+        paddr,
+        "POST",
+        "/api/announce",
+        &key,
+        r#"{"message":"reinício em 5 min"}"#,
+    );
+    assert_eq!(status, 200);
+    assert!(pump(&mut bots, Duration::from_secs(5), |b| b[0]
+        .events
+        .iter()
+        .any(
+            |(n, a)| n == "hexmp:announce" && a == &vec![s("reinício em 5 min")]
+        )));
+
+    // Expulsar.
+    let (status, body) = http(
+        paddr,
+        "POST",
+        &format!("/api/players/{pid}/kick"),
+        &key,
+        r#"{"reason":"teste de kick"}"#,
+    );
+    assert_eq!(status, 200, "{body}");
+    assert!(pump(&mut bots, Duration::from_secs(5), |b| b[0]
+        .rejected
+        .is_some()));
+    assert_eq!(bots[0].rejected.as_deref(), Some("teste de kick"));
+
+    // Volta e é banido por 2 h: cai na hora e não entra mais.
+    let mut bots = vec![server.bot_as(&identity, 9001)];
+    assert!(pump(&mut bots, Duration::from_secs(10), |b| b[0]
+        .player_id
+        .is_some()));
+    let pid = bots[0].player_id.unwrap();
+    let (status, body) = http(
+        paddr,
+        "POST",
+        &format!("/api/players/{pid}/ban"),
+        &key,
+        r#"{"reason":"speed hack","hours":2}"#,
+    );
+    assert_eq!(status, 200, "{body}");
+    assert!(pump(&mut bots, Duration::from_secs(5), |b| b[0]
+        .rejected
+        .is_some()));
+    let mut bots = vec![server.bot_as(&identity, 9002)];
+    assert!(pump(&mut bots, Duration::from_secs(10), |b| b[0]
+        .rejected
+        .is_some()));
+    assert!(bots[0].rejected.as_deref().unwrap().contains("speed hack"));
+
+    assert_eq!(
+        http(paddr, "POST", "/api/players/999/kick", &key, "{}").0,
+        400
+    );
+    assert_eq!(http(paddr, "GET", "/api/nada", &key, "").0, 404);
+
+    stop.store(true, Ordering::Relaxed);
+    panel_thread.join().unwrap();
 }

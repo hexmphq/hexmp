@@ -10,13 +10,18 @@ use std::time::{Duration, Instant};
 
 const USAGE: &str = "uso: hexmp-server (--key server.key [--public-addr IP:PORTA]... | --insecure) \
 [--bind 0.0.0.0:30120] [--max-clients 64] [--resources ./resources]... [--db URL] \
-[--hot-reload SEGUNDOS] [--seconds N]";
+[--hot-reload SEGUNDOS] [--seconds N] [--panel 127.0.0.1:30122 | --panel off] [--panel-key admin.key]";
 
 fn main() {
-    tracing_subscriber::fmt()
-        .with_env_filter(
+    use tracing_subscriber::layer::SubscriberExt;
+    use tracing_subscriber::util::SubscriberInitExt;
+    let logs = hexmp_server::logs::LogBuffer::new();
+    tracing_subscriber::registry()
+        .with(
             tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into()),
         )
+        .with(tracing_subscriber::fmt::layer())
+        .with(logs.layer())
         .init();
 
     let mut bind: SocketAddr = ([0, 0, 0, 0], DEFAULT_PORT).into();
@@ -28,6 +33,8 @@ fn main() {
     let mut key_file: Option<PathBuf> = std::env::var("HEXMP_KEY_FILE").ok().map(Into::into);
     let mut public_addrs: Vec<SocketAddr> = Vec::new();
     let mut insecure = false;
+    let mut panel_addr: Option<SocketAddr> = Some(([127, 0, 0, 1], 30122).into());
+    let mut panel_key = PathBuf::from("admin.key");
     let mut args = std::env::args().skip(1);
     while let Some(arg) = args.next() {
         if arg == "--insecure" {
@@ -44,6 +51,15 @@ fn main() {
             "--resources" => value.map(|v| resources.push(v.into())),
             "--db" => value.map(|v| db_url = Some(v)),
             "--key" => value.map(|v| key_file = Some(v.into())),
+            "--panel" => value.and_then(|v| {
+                if v == "off" {
+                    panel_addr = None;
+                    Some(())
+                } else {
+                    v.parse().ok().map(|a| panel_addr = Some(a))
+                }
+            }),
+            "--panel-key" => value.map(|v| panel_key = v.into()),
             "--public-addr" => value
                 .and_then(|v| v.parse().ok())
                 .map(|v| public_addrs.push(v)),
@@ -122,6 +138,7 @@ fn main() {
         }
         _ => None,
     };
+    let db_url_for_panel = db_url.clone();
     if let Some(url) = db_url {
         match hexmp_db::Db::connect(&url) {
             Ok(db) => {
@@ -158,7 +175,43 @@ fn main() {
             }
         });
     }
+    let accounts = match (&db_url_for_panel, require_auth) {
+        (Some(url), true) => hexmp_auth::AccountStore::open(url).ok(),
+        _ => None,
+    };
     let mut server = GameServer::new(transport, config).with_scripts(engine);
+    let panel_stop = Arc::new(AtomicBool::new(false));
+    let mut panel_thread = None;
+    if let Some(addr) = panel_addr {
+        let key = match hexmp_server::panel::load_or_create_key(&panel_key) {
+            Ok((key, created)) => {
+                if created {
+                    tracing::info!(arquivo = %panel_key.display(), "chave do painel criada");
+                }
+                key
+            }
+            Err(e) => {
+                eprintln!("chave do painel {}: {e}", panel_key.display());
+                std::process::exit(1);
+            }
+        };
+        if !addr.ip().is_loopback() {
+            tracing::warn!(%addr, "painel aberto fora do localhost: use HTTPS na frente");
+        }
+        let (handle, inbox) = hexmp_server::admin::channel();
+        server = server.with_admin(inbox);
+        match hexmp_server::panel::PanelServer::bind(addr, handle, logs.clone(), key, accounts) {
+            Ok(panel) => {
+                tracing::info!(
+                    "painel em http://{addr} (chave no arquivo {})",
+                    panel_key.display()
+                );
+                let stop = panel_stop.clone();
+                panel_thread = Some(std::thread::spawn(move || panel.run(&stop)));
+            }
+            Err(e) => tracing::error!(%addr, "painel não abriu: {e}"),
+        }
+    }
     if let Some(db) = bans {
         server = server.with_bans(db);
     }
@@ -171,6 +224,10 @@ fn main() {
     if let Some(engine) = server.scripts_mut() {
         // Para os recursos (gravam o pendente) e espera o banco terminar.
         engine.shutdown();
+    }
+    panel_stop.store(true, Ordering::Relaxed);
+    if let Some(t) = panel_thread {
+        let _ = t.join();
     }
     tracing::info!(ticks = server.world.tick, "hexmp-server encerrado");
 }

@@ -11,3 +11,6 @@ server.local.toml
 
 # Chaves de assinatura
 *.key
+
+# Chave do painel
+admin.key

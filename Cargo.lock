@@ -698,6 +698,9 @@ dependencies = [
  "hexmp-sim",
  "renet2",
  "renet2_netcode",
+ "serde",
+ "serde_json",
+ "tiny_http",
  "tracing",
  "tracing-subscriber",
 ]
