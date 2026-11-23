@@ -24,12 +24,14 @@ local function draw()
     events.emit("hud:point", "delivery", if playing then t else nil)
     if playing then
         markers.set("target", { label = t.label, position = t.position, radius = Config.reach, color = "#ffb340" })
+        blips.set("target", { label = t.label, position = t.position, color = "#ffb340" })
         zones.set("target", { position = t.position, radius = Config.reach }, function(inside)
             near = inside
             prompt()
         end)
     else
         markers.remove("target")
+        blips.remove("target")
         zones.remove("target")
     end
     prompt()

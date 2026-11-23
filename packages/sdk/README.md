@@ -3,7 +3,7 @@
 Definições de tipo para escrever recursos em Luau.
 
 - [`hexmp.d.luau`](hexmp.d.luau): API de **servidor** (`events`, `exports`, `rpc`, `timer`, `players`, `net`, `db`, `util`).
-- [`hexmp-client.d.luau`](hexmp-client.d.luau): API de **cliente** (`events`, `net.on`, `rpc.call`, `timer`, `me`, `camera`, `markers`, `zones`, `players` (lista, posição e quem está perto), `ui`, `keys`, `util`).
+- [`hexmp-client.d.luau`](hexmp-client.d.luau): API de **cliente** (`events`, `net.on`, `rpc.call`, `timer`, `me`, `camera`, `markers`, `blips`, `zones`, `players` (lista, posição e quem está perto), `ui`, `keys`, `util`).
 
 No VS Code com a extensão **luau-lsp**, adicione em `.vscode/settings.json`:
 
@@ -59,6 +59,7 @@ Regras do runtime:
 ```lua
 local at = { x = 12, y = 6, z = 0 }
 markers.set("loja", { position = at, radius = 4, label = "Loja" })
+blips.set("loja", { position = at, label = "Loja" }) -- ícone no mapa
 zones.set("loja", { position = at, radius = 4 }, function(inside)
     print(if inside then "entrou" else "saiu")
 end)

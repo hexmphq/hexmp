@@ -285,6 +285,10 @@ fn example_server_from_character_to_payday() {
     for label in ["Loja", "Depósito"] {
         assert!(seen.iter().any(|m| m.label == label), "{label}: {seen:?}");
     }
+    let blips = c.runtime.take_blips().unwrap();
+    for label in ["Loja", "Depósito"] {
+        assert!(blips.iter().any(|b| b.label == label), "{label}: {blips:?}");
+    }
 
     // Loja: a dica aparece perto, e E abre.
     let mut at = Vec3::ZERO;

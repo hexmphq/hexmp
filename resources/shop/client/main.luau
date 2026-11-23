@@ -8,8 +8,10 @@ local function point()
     events.emit("hud:point", "shop", value)
     if playing then
         markers.set("shop", { label = "Loja", position = Loja.posicao, radius = Loja.alcance })
+        blips.set("shop", { label = "Loja", position = Loja.posicao })
     else
         markers.remove("shop")
+        blips.remove("shop")
     end
 end
 

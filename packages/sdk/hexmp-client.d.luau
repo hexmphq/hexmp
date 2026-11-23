@@ -51,6 +51,13 @@ declare markers: {
     remove: (id: string) -> boolean,
 }
 
+declare blips: {
+    --- Ícone no mapa (e no minimapa). O mesmo `id` substitui o anterior. Cor padrão #40daff.
+    --- Até 64 por recurso.
+    set: (id: string, blip: { position: Vec3, color: string?, label: string? }) -> (),
+    remove: (id: string) -> boolean,
+}
+
 declare zones: {
     --- Área esférica (`radius` em metros, padrão 1) em volta do ponto: avisa quando o jogador
     --- local entra (`true`) e sai (`false`), e uma vez no começo com o estado atual. O mesmo `id`

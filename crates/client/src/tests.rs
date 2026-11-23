@@ -468,6 +468,37 @@ fn nearby_players_come_from_snapshots() {
 }
 
 #[test]
+fn blips_on_the_map() {
+    let mut rt = ClientRuntime::default();
+    assert!(rt.take_blips().is_none());
+    let code = r##"
+        blips.set("loja", { position = { x = 5, y = 7, z = 0 }, color = "#ff8000", label = "Loja" })
+        events.on("tirar", function() ui.send(blips.remove("loja")) end)"##;
+    start(&mut rt, "loja", code);
+    let b = rt.take_blips().unwrap();
+    assert_eq!(
+        (b[0].color, &*b[0].label, b[0].position.y),
+        ([255, 128, 0], "Loja", 7.0)
+    );
+    assert!(rt.take_blips().is_none(), "só quando muda");
+    start(&mut rt, "loja", code);
+    assert_eq!(rt.take_blips().unwrap().len(), 1, "reiniciar não duplica");
+    rt.emit("tirar", &[]);
+    assert_eq!(rt.take_blips(), Some(vec![]));
+    for bad in [
+        r#"blips.set("x", { position = { x = 0/0, y = 0, z = 0 } })"#,
+        r#"blips.set("x", { position = { x = 0, y = 0, z = 0 }, color = "azul" })"#,
+        r#"for i = 1, 65 do blips.set("x" .. i, { position = { x = 0, y = 0, z = 0 } }) end"#,
+    ] {
+        start(&mut rt, "mau", bad);
+    }
+    assert_eq!(rt.take_blips(), Some(vec![]));
+    start(&mut rt, "loja", code);
+    rt.stop_all();
+    assert_eq!(rt.take_blips(), Some(vec![]));
+}
+
+#[test]
 fn zone_replaced_inside_its_own_handler() {
     let mut rt = ClientRuntime::default();
     start(

@@ -92,6 +92,16 @@ pub struct Marker {
     pub label: String,
 }
 
+/// Ícone no mapa, desenhado pelo host.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Blip {
+    pub resource: String,
+    pub id: String,
+    pub position: Vec3,
+    pub color: [u8; 3],
+    pub label: String,
+}
+
 /// Área esférica que avisa quando o jogador local entra e sai.
 struct Zone {
     id: String,
@@ -159,6 +169,8 @@ struct Shared {
     held: RefCell<HashSet<u32>>,
     markers: RefCell<BTreeMap<(String, String), Marker>>,
     markers_changed: Cell<bool>,
+    blips: RefCell<BTreeMap<(String, String), Blip>>,
+    blips_changed: Cell<bool>,
     zones: RefCell<Vec<Zone>>,
     me: RefCell<Me>,
     players: RefCell<BTreeMap<PlayerId, String>>,
@@ -217,6 +229,8 @@ impl Shared {
             .retain(|b| &*b.handler.resource != resource);
         self.markers.borrow_mut().retain(|(r, _), _| r != resource);
         self.markers_changed.set(true);
+        self.blips.borrow_mut().retain(|(r, _), _| r != resource);
+        self.blips_changed.set(true);
         self.zones
             .borrow_mut()
             .retain(|z| &*z.handler.resource != resource);
@@ -278,6 +292,8 @@ impl ClientRuntime {
                 held: RefCell::default(),
                 markers: RefCell::default(),
                 markers_changed: Cell::new(false),
+                blips: RefCell::default(),
+                blips_changed: Cell::new(false),
                 zones: RefCell::default(),
                 me: RefCell::default(),
                 players: RefCell::default(),
@@ -323,6 +339,14 @@ impl ClientRuntime {
             .markers_changed
             .take()
             .then(|| self.shared.markers.borrow().values().cloned().collect())
+    }
+
+    /// Todos os ícones do mapa, se algo mudou desde a última chamada.
+    pub fn take_blips(&mut self) -> Option<Vec<Blip>> {
+        self.shared
+            .blips_changed
+            .take()
+            .then(|| self.shared.blips.borrow().values().cloned().collect())
     }
 
     /// Dispara um evento local para os scripts (ex.: vindo do jogo).
@@ -1147,6 +1171,58 @@ fn install_api(
         })?,
     )?;
     g.set("markers", markers)?;
+
+    // blips: ícones no mapa
+    let blips = lua.create_table()?;
+    let (w, r) = (Rc::downgrade(shared), resource.clone());
+    blips.set(
+        "set",
+        lua.create_function(move |_, (id, t): (String, mlua::Table)| {
+            let s = upgrade(&w)?;
+            check_id("blips.set", &id)?;
+            let (position, _) = place("blips.set", &t)?;
+            let label = t.get::<Option<String>>("label")?.unwrap_or_default();
+            if label.len() > MAX_LABEL {
+                return Err(rt("blips.set: texto grande demais"));
+            }
+            let color = match t.get::<Option<String>>("color")? {
+                Some(c) => color(&c).ok_or_else(|| rt("blips.set: cor deve ser #rrggbb"))?,
+                None => DEFAULT_COLOR,
+            };
+            let blip = Blip {
+                resource: r.to_string(),
+                id: id.clone(),
+                position,
+                color,
+                label,
+            };
+            let key = (r.to_string(), id);
+            let mut all = s.blips.borrow_mut();
+            if all.get(&key) == Some(&blip) {
+                return Ok(());
+            }
+            let mine = all.keys().filter(|(x, _)| **x == *r).count();
+            if mine >= MAX_MARKERS && !all.contains_key(&key) {
+                return Err(rt("blips.set: ícones demais no recurso"));
+            }
+            all.insert(key, blip);
+            s.blips_changed.set(true);
+            Ok(())
+        })?,
+    )?;
+    let (w, r) = (Rc::downgrade(shared), resource.clone());
+    blips.set(
+        "remove",
+        lua.create_function(move |_, id: String| {
+            let s = upgrade(&w)?;
+            let found = s.blips.borrow_mut().remove(&(r.to_string(), id)).is_some();
+            if found {
+                s.blips_changed.set(true);
+            }
+            Ok(found)
+        })?,
+    )?;
+    g.set("blips", blips)?;
 
     // zones: áreas que avisam quando o jogador local entra e sai
     let zones = lua.create_table()?;
