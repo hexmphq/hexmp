@@ -36,7 +36,8 @@ Sem argumentos, o servidor lê o `hexmp.cfg` da pasta atual. O do repositório s
 dinheiro, inventário, loja e um emprego de entregador. Ele usa `insecure` e só aceita este computador; para abrir a
 outros, use `key` ([docs/autenticacao.md](docs/autenticacao.md)).
 
-Como escrever recursos: [packages/sdk](packages/sdk/README.md).
+Tem ou quer ter um servidor? Comece pelo [guia do dono de servidor](docs/servidor.md) e pelo
+[primeiro recurso](docs/primeiro-recurso.md). Referência da API: [packages/sdk](packages/sdk/README.md).
 
 ## Licença
 
