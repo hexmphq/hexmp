@@ -73,7 +73,7 @@ São dois programas: o `hexmp-auth` (login, HTTP) e o `hexmp-server` (jogo, UDP)
    }
    ```
 
-> **Atrás de um proxy na mesma máquina**, o login vê o IP do proxy para todos. Os limites por IP (10 logins errados por minuto, 5 contas novas por hora) passam a valer para todos juntos: errar muito a senha pode travar o login dos outros por um minuto. É uma limitação atual.
+Os limites por IP (10 logins errados por minuto, 5 contas novas por hora) usam o IP que o proxy repassa em `X-Forwarded-For`. O login só confia nesse cabeçalho quando o pedido vem da própria máquina; por isso o proxy precisa rodar **nela** (como no exemplo).
 
 Conta HexM, lista de servidores e API de login: [autenticacao.md](autenticacao.md).
 

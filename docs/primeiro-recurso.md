@@ -247,7 +247,7 @@ Se algo não funcionar:
 | Sintoma | O que ver |
 |---|---|
 | O recurso não aparece | A pasta está dentro de um `resources` do `hexmp.cfg`? Tem `resource.luau`? |
-| `erro ao carregar` no log | A mensagem diz o arquivo e o motivo. Depois de um erro ao reiniciar, o recurso fica parado e o hot-reload **não** tenta de novo: corrija e inicie pelo painel |
+| `erro ao carregar` no log | A mensagem diz o arquivo e o motivo. O recurso fica parado até você salvar a correção; com `hot-reload`, ele volta sozinho |
 | Erro de migração | Você editou um `.sql` já aplicado. Desfaça e crie outro arquivo |
 | Nada acontece com a tecla | Veja no F7 se outra ação usa a mesma tecla. O foco está numa página? |
 

@@ -21,6 +21,25 @@ use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
+/// IP de quem fez o pedido. Atrás de um proxy na mesma máquina (Caddy, nginx), todos chegam de
+/// 127.0.0.1: aí vale o último endereço de `X-Forwarded-For`, o que o proxy viu. De fora da
+/// máquina o cabeçalho é ignorado, senão qualquer um escolheria o próprio IP.
+fn client_ip(req: &tiny_http::Request) -> IpAddr {
+    let peer = req
+        .remote_addr()
+        .map(|a| a.ip())
+        .unwrap_or(IpAddr::from([0, 0, 0, 0]));
+    if !peer.is_loopback() {
+        return peer;
+    }
+    req.headers()
+        .iter()
+        .find(|h| h.field.equiv("X-Forwarded-For"))
+        .and_then(|h| h.value.as_str().rsplit(',').next())
+        .and_then(|ip| ip.trim().parse().ok())
+        .unwrap_or(peer)
+}
+
 #[derive(Debug, Clone)]
 pub struct ServiceConfig {
     /// Endereços públicos do(s) servidor(es) de jogo que aceitam os tokens.
@@ -177,10 +196,7 @@ impl AuthService {
     }
 
     fn handle(&self, mut req: tiny_http::Request) {
-        let ip = req
-            .remote_addr()
-            .map(|a| a.ip())
-            .unwrap_or(IpAddr::from([0, 0, 0, 0]));
+        let ip = client_ip(&req);
         if *req.method() == tiny_http::Method::Get
             && req.url() == "/v1/image"
             && let Some((data, kind)) = self.config.listing.as_ref().and_then(|l| l.image())

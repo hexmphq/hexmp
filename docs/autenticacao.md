@@ -31,7 +31,8 @@ hexmp-server --key server.key --public-addr 203.0.113.10:30120 --db sqlite:hexmp
 `--public-addr` precisa ser igual ao `--game-server` do serviço. Se não for, o token é recusado.
 Sem `--public-addr`, vale o endereço do `--bind`, o que só funciona localmente.
 
-Em produção, coloque o `hexmp-auth` atrás de um proxy com HTTPS (Caddy ou nginx).
+Em produção, coloque o `hexmp-auth` atrás de um proxy com HTTPS (Caddy ou nginx) **na mesma máquina**. Só de lá o
+login aceita o IP do jogador em `X-Forwarded-For`, usado nos limites por IP.
 
 ## Conta HexM (opcional)
 

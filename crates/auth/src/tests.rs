@@ -106,10 +106,21 @@ fn token_carries_identity() {
 }
 
 fn http(addr: SocketAddr, method: &str, path: &str, body: &str) -> (u16, serde_json::Value) {
+    http_with(addr, method, path, body, "")
+}
+
+/// `headers`: linhas extras, cada uma terminando em `\r\n`.
+fn http_with(
+    addr: SocketAddr,
+    method: &str,
+    path: &str,
+    body: &str,
+    headers: &str,
+) -> (u16, serde_json::Value) {
     let mut s = std::net::TcpStream::connect(addr).unwrap();
     write!(
         s,
-        "{method} {path} HTTP/1.1\r\nHost: x\r\nContent-Type: application/json\r\n\
+        "{method} {path} HTTP/1.1\r\nHost: x\r\n{headers}Content-Type: application/json\r\n\
          Content-Length: {}\r\nConnection: close\r\n\r\n{body}",
         body.len()
     )
@@ -197,6 +208,13 @@ fn http_service_register_login_and_rate_limit() {
     }
     // Bloqueado depois de 3 falhas, mesmo com a senha certa.
     assert_eq!(http(addr, "POST", "/v1/login", creds).0, 429);
+    // Atrás de um proxy local, cada jogador conta pelo próprio IP.
+    let via = |ip: &str| format!("X-Forwarded-For: {ip}\r\n");
+    let other = via("203.0.113.9");
+    assert_eq!(http_with(addr, "POST", "/v1/login", creds, &other).0, 200);
+    // O proxy acrescenta o IP que viu no fim; o que o jogador escreveu antes não vale.
+    let forged = via("203.0.113.9, 127.0.0.1");
+    assert_eq!(http_with(addr, "POST", "/v1/login", creds, &forged).0, 429);
     assert_eq!(http(addr, "GET", "/nada", "").0, 404);
 
     stop.store(true, Ordering::Relaxed);

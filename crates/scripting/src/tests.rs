@@ -439,6 +439,26 @@ fn hot_reload_picks_up_changes() {
     assert_eq!(reloaded.len(), 1);
     assert!(reloaded[0].1.is_ok());
     assert_eq!(e.call_rpc(1, "versao", &[]), Ok(vec![n(2.0)]));
+
+    // Salvou com erro: para; corrigiu: volta sozinho.
+    std::fs::write(f.root.join("h/main.luau"), "local x = = 1").unwrap();
+    assert!(e.reload_changed()[0].1.is_err());
+    assert!(!e.is_running("h"));
+    assert!(e.reload_changed().is_empty(), "sem mudança, não tenta");
+    std::fs::write(
+        f.root.join("h/main.luau"),
+        "rpc.define('versao', function() return 3 end) -- corrigido",
+    )
+    .unwrap();
+    assert!(e.reload_changed()[0].1.is_ok());
+    assert_eq!(e.call_rpc(1, "versao", &[]), Ok(vec![n(3.0)]));
+
+    // Parado de propósito (painel) não volta.
+    std::fs::write(f.root.join("h/main.luau"), "local x = = 2").unwrap();
+    assert!(e.reload_changed()[0].1.is_err());
+    e.stop("h");
+    std::fs::write(f.root.join("h/main.luau"), "-- corrigido de novo").unwrap();
+    assert!(e.reload_changed().is_empty());
 }
 
 #[test]

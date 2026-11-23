@@ -339,6 +339,9 @@ pub struct ScriptEngine {
     shared: Rc<Shared>,
     /// Na ordem em que foram iniciados.
     running: Vec<Resource>,
+    /// Recursos que falharam ao iniciar, com os arquivos de então: o hot-reload tenta de novo
+    /// quando mudam.
+    broken: HashMap<String, Fingerprint>,
     rate_state: HashMap<(PlayerId, String), VecDeque<Duration>>,
 }
 
@@ -366,6 +369,7 @@ impl ScriptEngine {
                 deferred: RefCell::new(HashMap::new()),
             }),
             running: Vec::new(),
+            broken: HashMap::new(),
             rate_state: HashMap::new(),
         }
     }
@@ -437,7 +441,16 @@ impl ScriptEngine {
     /// Inicia o recurso e, antes, suas dependências.
     pub fn start(&mut self, name: &str) -> Result<(), StartError> {
         let mut visiting = HashSet::new();
-        self.start_inner(name, &mut visiting)
+        let result = self.start_inner(name, &mut visiting);
+        match (&result, self.resolve(name)) {
+            (Err(_), Some(dir)) => {
+                self.broken.insert(name.into(), fingerprint(&dir));
+            }
+            _ => {
+                self.broken.remove(name);
+            }
+        }
+        result
     }
 
     fn start_inner(
@@ -571,6 +584,8 @@ impl ScriptEngine {
 
     /// Para o recurso. Dependentes **não** são parados (como no FiveM); todos recebem `resourceStop`.
     pub fn stop(&mut self, name: &str) -> bool {
+        // Parado de propósito: o hot-reload não o traz de volta.
+        self.broken.remove(name);
         let Some(pos) = self.running.iter().position(|r| &*r.name == name) else {
             return false;
         };
@@ -594,12 +609,19 @@ impl ScriptEngine {
 
     /// Hot-reload: reinicia recursos cujos arquivos mudaram. Devolve os reiniciados.
     pub fn reload_changed(&mut self) -> Vec<(String, Result<(), StartError>)> {
-        let changed: Vec<String> = self
+        let mut changed: Vec<String> = self
             .running
             .iter()
             .filter(|r| fingerprint(&r.dir) != r.fingerprint)
             .map(|r| r.name.to_string())
             .collect();
+        // Os que tinham falhado e já foram mexidos.
+        for (name, old) in &self.broken {
+            let now = self.resolve(name).map(|d| fingerprint(&d));
+            if now.is_some_and(|f| f != *old) && !self.is_running(name) {
+                changed.push(name.clone());
+            }
+        }
         changed
             .into_iter()
             .map(|n| {
