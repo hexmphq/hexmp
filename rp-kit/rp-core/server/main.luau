@@ -7,6 +7,7 @@
 --          → módulo chama exports "rp-core".moduleReady(playerId, nome)
 --          → quando todos responderam: "rp:characterLoaded"(playerId, char) e o RPC responde.
 --   saída/logout → "rp:characterUnloading"(playerId, char): módulos gravam e liberam memória.
+--   Sem personagem, o jogador fica travado (players.freeze): não anda pelo mundo na tela de escolha.
 
 type Vec = { x: number, y: number, z: number }
 type Character = {
@@ -99,6 +100,7 @@ local function finishLoading(playerId: number)
     end
     active[playerId] = l.char
     players.setPosition(playerId, l.char.position)
+    players.freeze(playerId, false)
     events.emit("rp:characterLoaded", playerId, l.char)
     net.emit(playerId, "rp:characterLoaded", summary(l.char))
     l.reply.ok(summary(l.char))
@@ -114,6 +116,7 @@ local function unload(playerId: number)
     local st = savePositionStatement(playerId, c)
     db.execute(st[1], st[2])
     active[playerId] = nil
+    players.freeze(playerId, true)
     net.emit(playerId, "rp:characterUnloaded")
 end
 
@@ -249,6 +252,29 @@ rpc.define("rp.characters.select", { rateLimit = "5/10s" }, function(player, id)
     )
 end)
 
+rpc.define("rp.characters.delete", { rateLimit = "3/10s" }, function(player, id)
+    if type(id) ~= "string" then
+        error("personagem inválido")
+    end
+    local current = active[player.id] or (loading[player.id] and loading[player.id].char)
+    if current and current.id == id then
+        error("saia do personagem antes de excluir")
+    end
+    local reply = rpc.defer()
+    -- Só marca: os dados ficam no banco, para o dono do servidor recuperar se precisar.
+    db.execute(
+        "UPDATE rp_characters SET deleted_at = $1 WHERE id = $2 AND account = $3 AND deleted_at IS NULL",
+        { util.now(), id, player.account },
+        function(changed, err)
+            if err or changed ~= 1 then
+                return reply.fail("personagem não encontrado")
+            end
+            events.emit("rp:characterDeleted", player.id, id)
+            reply.ok(true)
+        end
+    )
+end)
+
 rpc.define("rp.characters.logout", function(player)
     if active[player.id] == nil then
         error("nenhum personagem ativo")
@@ -264,6 +290,10 @@ end)
 
 -- Eventos do servidor -----------------------------------------------------
 
+events.on("playerJoined", function(player)
+    players.freeze(player.id, true)
+end)
+
 events.on("playerDropped", function(player)
     loading[player.id] = nil
     unload(player.id)
@@ -273,6 +303,10 @@ events.on("resourceStop", function(name)
     if name == RESOURCE_NAME then
         for playerId in active do
             unload(playerId)
+        end
+        -- Sem o rp-core, ninguém escolheria personagem: solta todo mundo.
+        for _, p in players.list() do
+            players.freeze(p.id, false)
         end
     else
         -- Módulo parou: não esperar mais por ele.
@@ -285,6 +319,11 @@ events.on("resourceStop", function(name)
         end
     end
 end)
+
+-- Quem já estava no servidor quando o recurso (re)iniciou ainda não tem personagem.
+for _, p in players.list() do
+    players.freeze(p.id, true)
+end
 
 -- Gravação em lote das posições.
 timer.every(Config.saveIntervalMs, function()

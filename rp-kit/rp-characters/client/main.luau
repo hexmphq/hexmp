@@ -71,6 +71,12 @@ ui.on("select", function(data)
     end)
 end)
 
+ui.on("delete", function(data)
+    rpc.call("rp.characters.delete", { data.id }, function(err)
+        list(err)
+    end)
+end)
+
 ui.on("create", function(data)
     rpc.call("rp.characters.create", { data }, function(err, character)
         if err then

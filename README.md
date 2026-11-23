@@ -28,7 +28,7 @@ docs/           documentação e decisões técnicas
 
 ```sh
 cargo run -p hexmp-server     # servidor de exemplo (hexmp.cfg)
-cargo run -p hexmp-headless-bot -- --bots 10 --seconds 10
+cargo run -p hexmp-headless-bot -- --bots 10 --seconds 10 --character
 cargo test --workspace
 ```
 

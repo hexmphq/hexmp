@@ -372,7 +372,9 @@ fn delivery_job_pays_once_and_only_at_the_address() {
     }));
     let current = call(&mut bots, "delivery.current", &[]).unwrap();
     assert!(current.iter().all(|v| *v == ScriptValue::Nil));
-    assert_eq!(bots[0].stats.corrections, 1, "só a do personagem novo");
+    // Nenhuma por velocidade: travar ao entrar, ir ao personagem (teleporte e soltar) e travar
+    // de novo ao sair.
+    assert_eq!(bots[0].stats.corrections, 4);
 }
 
 #[test]
@@ -386,10 +388,18 @@ fn shop_over_the_network_with_rp_kit() {
         call(&mut bots, "shop.buy", &[s("agua")]),
         Err("você está longe da loja".into())
     );
-    walk_to(&mut bots, 12.0, 6.0);
-    assert_eq!(
-        call(&mut bots, "shop.buy", &[s("agua")]),
-        Err("personagem não carregado".into())
+    // Sem personagem, o rp-core trava: o servidor devolve o bot ao lugar.
+    bots[0].behavior = Behavior::GoTo {
+        target: Vec3::new(12.0, 6.0, 0.0),
+        speed: 40.0,
+    };
+    pump(&mut bots, Duration::from_millis(600), |_| false);
+    bots[0].behavior = Behavior::Idle;
+    pump(&mut bots, Duration::from_millis(300), |_| false);
+    assert!(
+        bots[0].position.distance(Vec3::ZERO) < 1.0,
+        "{:?}",
+        bots[0].position
     );
     new_character(&mut bots);
     pump(&mut bots, Duration::from_millis(2100), |_| false);
@@ -495,11 +505,28 @@ fn character_money_and_inventory_survive_restart() {
     };
     assert_eq!(history.len(), 2);
 
-    // Outra conta não seleciona o personagem.
+    // Outra conta não seleciona nem exclui o personagem.
     let mut other = join(&server, "intruso", 5002);
+    let not_found = Err("personagem não encontrado".into());
+    for rpc in ["rp.characters.select", "rp.characters.delete"] {
+        let r = call(&mut other, rpc, std::slice::from_ref(&char_id));
+        assert_eq!(r, not_found, "{rpc}");
+    }
+
+    // O dono não exclui o ativo; depois de sair, exclui, e ele some da lista.
+    let delete =
+        |bots: &mut Vec<Bot>| call(bots, "rp.characters.delete", std::slice::from_ref(&char_id));
     assert_eq!(
-        call(&mut other, "rp.characters.select", &[char_id]),
-        Err("personagem não encontrado".into())
+        delete(&mut bots),
+        Err("saia do personagem antes de excluir".into())
+    );
+    ok1(call(&mut bots, "rp.characters.logout", &[]));
+    assert_eq!(delete(&mut bots), Ok(vec![ScriptValue::Bool(true)]));
+    assert_eq!(delete(&mut bots), not_found, "só uma vez");
+    let list = ok1(call(&mut bots, "rp.characters.list", &[]));
+    assert!(
+        matches!(list, ScriptValue::Array(ref l) if l.is_empty()),
+        "{list:?}"
     );
 }
 

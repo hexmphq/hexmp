@@ -14,10 +14,10 @@ cargo run -p hexmp-server
 
 Sem argumentos, o servidor lê o `hexmp.cfg` da pasta atual. O do repositório sobe um RP completo (personagens, dinheiro, inventário, loja, entregas), só para este computador e sem login.
 
-Em outro terminal, para ver jogadores e o que os scripts mandam à tela:
+Em outro terminal, para ver jogadores e o que os scripts mandam à tela (`--character` faz cada bot escolher um personagem; sem personagem, o `rp-core` não deixa andar):
 
 ```sh
-cargo run -p hexmp-headless-bot -- --bots 4 --seconds 60
+cargo run -p hexmp-headless-bot -- --bots 4 --seconds 60 --character
 cargo run -p hexmp-client -- --name Fulano --seconds 60
 ```
 
@@ -127,7 +127,7 @@ Escrever o seu: [primeiro-recurso.md](primeiro-recurso.md).
 - [ ] `hot-reload` fora do arquivo
 - [ ] `server.key` e `admin.key` fora do Git e legíveis só pelo usuário do servidor
 - [ ] Cópia do banco automática, com restauração testada
-- [ ] Carga testada: `hexmp-headless-bot --key server.key --bots 50 --seconds 60`
+- [ ] Carga testada: `hexmp-headless-bot --key server.key --bots 50 --seconds 60 --character`
 - [ ] Servidor e login reiniciam sozinhos se a máquina reiniciar
 
 ## 8. Problemas comuns
@@ -141,7 +141,7 @@ Escrever o seu: [primeiro-recurso.md](primeiro-recurso.md).
 | Login funciona, mas ninguém entra | `public-addr` diferente do `--game-server`, UDP fechado, ou mais de 60 s entre o login e a entrada |
 | Jogador não entra e o log fala do banco | O banco não respondeu à checagem de ban; por segurança, ele não entra |
 | `migração ... foi alterada depois de aplicada` | Desfaça a edição do `.sql` e crie um arquivo novo |
-| Jogador volta para trás ao andar | Passou do limite de velocidade (90 m/s). Para mover alguém por script, use `players.setPosition` |
+| Jogador volta para trás ao andar | Ainda não escolheu personagem (o `rp-core` trava), ou passou do limite de velocidade (90 m/s). Para mover alguém por script, use `players.setPosition` |
 | `tempo de execução excedido` | Um handler passou de 50 ms: divida o trabalho com `timer.after` |
 
 ## 9. O que ainda não existe

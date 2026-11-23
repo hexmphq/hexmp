@@ -4,7 +4,7 @@ Recursos base de roleplay, em Luau, licença MIT OR Apache-2.0. Use como estão 
 
 | Recurso | O que faz |
 |---|---|
-| `rp-core` | Personagens por conta (até 3): criar, listar, selecionar, sair. Salva a posição. Coordena o carregamento dos módulos. |
+| `rp-core` | Personagens por conta (até 3): criar, listar, selecionar, excluir, sair. Salva a posição. Trava quem está sem personagem. Coordena o carregamento dos módulos. |
 | `rp-money` | Dinheiro em mão (`cash`) e no banco (`bank`), transferências e extrato. |
 | `rp-inventory` | Inventário por personagem com peso máximo, uso e entrega de itens. |
 | `rp-characters` | Tela de criar e escolher personagem (F5 troca). |
@@ -30,6 +30,8 @@ As tabelas são criadas pelas migrações de cada recurso (`sql/*.sql`) na prime
 
 ## Fluxo de personagem
 
+Sem personagem, o jogador fica travado (`players.freeze`): o servidor recusa o movimento até ele escolher um. Excluir só marca `deleted_at`; o registro e os dados dos módulos continuam no banco.
+
 ```
 cliente: rp.characters.select(id)
 rp-core: "rp:characterLoading"(playerId, personagem)
@@ -47,6 +49,7 @@ Um módulo novo segue o mesmo contrato: `exports.call("rp-core", "registerModule
 | `rp.characters.list` | — | `{ {id, firstName, lastName, birthdate} }` |
 | `rp.characters.create` | `{firstName, lastName, birthdate = "AAAA-MM-DD"}` | resumo do personagem |
 | `rp.characters.select` | `id` | resumo do personagem |
+| `rp.characters.delete` | `id` (não o ativo) | `true` |
 | `rp.characters.logout` / `current` | — | `true` / resumo ou `nil` |
 | `rp.money.get` | — | `{cash, bank}` |
 | `rp.money.transfer` | `playerId, valor` | saldo do banco |

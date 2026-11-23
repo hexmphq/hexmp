@@ -23,6 +23,8 @@ pub struct Player {
     /// Tick do último input aceito.
     last_move_tick: u32,
     pub rejected_moves: u32,
+    /// Travado por script: nenhum movimento do cliente é aceito.
+    pub frozen: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -30,6 +32,7 @@ pub enum MoveError {
     UnknownPlayer,
     InvalidPosition,
     TooFast,
+    Frozen,
 }
 
 #[derive(Debug)]
@@ -63,6 +66,7 @@ impl World {
             position: SPAWN_POINT,
             last_move_tick: self.tick,
             rejected_moves: 0,
+            frozen: false,
         };
         self.players.entry(id).or_insert(player)
     }
@@ -88,6 +92,9 @@ impl World {
         let tick = self.tick;
         let tick_rate = self.tick_rate as f32;
         let p = self.players.get_mut(&id).ok_or(MoveError::UnknownPlayer)?;
+        if p.frozen {
+            return Err(MoveError::Frozen);
+        }
 
         let in_bounds = [to.x, to.y, to.z].iter().all(|v| v.abs() <= WORLD_LIMIT);
         if !to.is_finite() || !in_bounds {
@@ -120,6 +127,15 @@ impl World {
         Ok(())
     }
 
+    /// Trava ou solta o jogador. Teleporte continua valendo.
+    pub fn set_frozen(&mut self, id: PlayerId, frozen: bool) -> Result<(), MoveError> {
+        let p = self.players.get_mut(&id).ok_or(MoveError::UnknownPlayer)?;
+        p.frozen = frozen;
+        // Ao soltar, o tempo parado não vira crédito de velocidade.
+        p.last_move_tick = self.tick;
+        Ok(())
+    }
+
     /// Jogadores dentro do raio. Linear por enquanto; grade espacial depois.
     pub fn visible_from(&self, center: Vec3, radius: f32) -> Vec<EntityState> {
         self.players
@@ -136,6 +152,30 @@ impl World {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn frozen_player_cannot_move_but_can_be_teleported() {
+        let mut w = World::new(30);
+        let id = w.spawn_player("ana".into()).id;
+        w.set_frozen(id, true).unwrap();
+        w.tick += 30;
+        assert_eq!(
+            w.try_move(id, Vec3::new(1.0, 0.0, 0.0)),
+            Err(MoveError::Frozen)
+        );
+        w.teleport(id, Vec3::new(9.0, 0.0, 0.0)).unwrap();
+        assert_eq!(w.player(id).unwrap().position.x, 9.0);
+        w.tick += 300;
+        w.set_frozen(id, false).unwrap();
+        // Parado 10 s não dá direito a um salto de 900 m.
+        assert_eq!(
+            w.try_move(id, Vec3::new(500.0, 0.0, 0.0)),
+            Err(MoveError::TooFast)
+        );
+        w.tick += 1;
+        assert!(w.try_move(id, Vec3::new(10.0, 0.0, 0.0)).is_ok());
+        assert!(w.set_frozen(2, true).is_err());
+    }
 
     fn world_with_player() -> (World, PlayerId) {
         let mut w = World::new(30);

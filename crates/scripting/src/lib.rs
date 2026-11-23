@@ -72,6 +72,11 @@ pub enum Command {
         player: PlayerId,
         position: Vec3,
     },
+    /// Trava (ou solta) o movimento do jogador.
+    Freeze {
+        player: PlayerId,
+        frozen: bool,
+    },
     /// Recurso com parte de cliente iniciou: mande [`ScriptEngine::client_bundle`] a todos.
     ResourceStarted {
         name: String,
@@ -1173,6 +1178,17 @@ fn install_api(lua: &Lua, resource: &Rc<str>, shared: &Rc<Shared>) -> mlua::Resu
                 player: id,
                 reason: reason.unwrap_or_else(|| "removido pelo servidor".into()),
             });
+            Ok(())
+        })?,
+    )?;
+    let w = Rc::downgrade(shared);
+    players.set(
+        "freeze",
+        lua.create_function(move |_, (id, frozen): (PlayerId, bool)| {
+            upgrade(&w)?
+                .outbox
+                .borrow_mut()
+                .push(Command::Freeze { player: id, frozen });
             Ok(())
         })?,
     )?;

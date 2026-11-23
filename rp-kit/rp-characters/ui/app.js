@@ -24,6 +24,8 @@ function show(msg) {
   const all = Array.isArray(msg.characters) ? msg.characters : [];
   $("list").replaceChildren();
   for (const c of all) {
+    const row = document.createElement("div");
+    row.className = "row-char";
     const b = document.createElement("button");
     add(b, "strong", `${c.firstName} ${c.lastName}`);
     add(b, "small", c.birthdate.split("-").reverse().join("/"));
@@ -32,7 +34,27 @@ function show(msg) {
       busy = true;
       call("select", { id: c.id });
     };
-    $("list").append(b);
+    // Dois cliques: o primeiro só pede confirmação.
+    const del = document.createElement("button");
+    del.className = "delete";
+    del.textContent = "Excluir";
+    del.title = `Excluir ${c.firstName} ${c.lastName}`;
+    del.onclick = () => {
+      if (busy) return;
+      if (!del.classList.contains("sure")) {
+        del.classList.add("sure");
+        del.textContent = "Confirmar";
+        setTimeout(() => {
+          del.classList.remove("sure");
+          del.textContent = "Excluir";
+        }, 4000);
+        return;
+      }
+      busy = true;
+      call("delete", { id: c.id });
+    };
+    row.append(b, del);
+    $("list").append(row);
   }
   if (all.length < 3) {
     const b = document.createElement("button");
@@ -41,7 +63,7 @@ function show(msg) {
     b.onclick = () => form(true);
     $("list").append(b);
   }
-  $("list").firstChild.focus();
+  $("list").querySelector("button").focus();
 }
 
 window.addEventListener("message", (e) => {

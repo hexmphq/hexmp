@@ -359,6 +359,16 @@ impl<T: Transport> GameServer<T> {
                         self.send(client, &ServerMessage::Correction { position });
                     }
                 }
+                Command::Freeze { player, frozen } => {
+                    if self.world.set_frozen(player, frozen).is_ok()
+                        && let (Some(client), Some(p)) =
+                            (self.client_of(player), self.world.player(player))
+                    {
+                        // O cliente volta para onde o servidor acha que ele está.
+                        let position = p.position;
+                        self.send(client, &ServerMessage::Correction { position });
+                    }
+                }
                 Command::ResourceStarted { name } => {
                     if let Some(msg) = self
                         .scripts

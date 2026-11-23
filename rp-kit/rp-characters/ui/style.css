@@ -38,3 +38,10 @@ input {
 input:focus { outline: none; border-color: var(--cyan); }
 .row { display: flex; justify-content: space-between; margin-top: 8px; }
 #error { min-height: 22px; margin: 20px 0 0; color: var(--coral); }
+
+.row-char { display: flex; flex-direction: column; gap: 6px; }
+#list .delete {
+  height: auto; padding: 6px; font-size: 13px; color: var(--muted); background: transparent; border-color: transparent;
+}
+#list .delete:hover, #list .delete:focus-visible { color: var(--coral); border-color: var(--coral); }
+#list .delete.sure { color: #fff; background: #a3263a; border-color: #a3263a; }
