@@ -62,6 +62,12 @@ declare zones: {
 declare players: {
     --- Jogadores conhecidos pelo cliente.
     list: () -> { { id: number, name: string } },
+    --- Posição de outro jogador, se ele estiver perto (no raio de interesse do servidor, 500 m
+    --- por padrão). Atualiza a cada snapshot. `nil` para quem está longe e para você mesmo.
+    position: (id: number) -> Vec3?,
+    --- Outros jogadores a até `radius` metros de você, do mais perto ao mais longe. Só enxerga
+    --- quem o servidor mandou (raio de interesse). O servidor precisa conferir a distância de novo.
+    nearby: (radius: number) -> { { id: number, name: string, position: Vec3, distance: number } },
 }
 
 declare ui: {

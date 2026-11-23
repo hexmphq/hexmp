@@ -3,7 +3,7 @@
 Definições de tipo para escrever recursos em Luau.
 
 - [`hexmp.d.luau`](hexmp.d.luau): API de **servidor** (`events`, `exports`, `rpc`, `timer`, `players`, `net`, `db`, `util`).
-- [`hexmp-client.d.luau`](hexmp-client.d.luau): API de **cliente** (`events`, `net.on`, `rpc.call`, `timer`, `me`, `camera`, `markers`, `zones`, `players`, `ui`, `keys`, `util`).
+- [`hexmp-client.d.luau`](hexmp-client.d.luau): API de **cliente** (`events`, `net.on`, `rpc.call`, `timer`, `me`, `camera`, `markers`, `zones`, `players` (lista, posição e quem está perto), `ui`, `keys`, `util`).
 
 No VS Code com a extensão **luau-lsp**, adicione em `.vscode/settings.json`:
 
@@ -65,6 +65,16 @@ end)
 ```
 
 O cliente desenha o marcador e confere a área a cada quadro: o recurso não precisa de timer. A área só serve para a tela. Como o jogador pode alterar o cliente, o servidor confere a distância no RPC.
+
+### Jogadores por perto
+
+```lua
+for _, p in players.nearby(5) do
+    print(p.name, math.floor(p.distance), "m")
+end
+```
+
+O cliente só conhece quem o servidor mandou no snapshot: os jogadores no raio de interesse (`interest_radius`, 500 m por padrão). Quem está mais longe não aparece em `players.nearby` e `players.position(id)` devolve `nil`. Para ações sobre outro jogador (revistar, dar item), o servidor confere a distância de novo.
 
 ### Contrato da NUI (página HTML)
 

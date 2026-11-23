@@ -162,6 +162,8 @@ struct Shared {
     zones: RefCell<Vec<Zone>>,
     me: RefCell<Me>,
     players: RefCell<BTreeMap<PlayerId, String>>,
+    /// Outros jogadores no raio de interesse, do último snapshot.
+    positions: RefCell<HashMap<PlayerId, Vec3>>,
     errors: Cell<u64>,
 }
 
@@ -279,6 +281,7 @@ impl ClientRuntime {
                 zones: RefCell::default(),
                 me: RefCell::default(),
                 players: RefCell::default(),
+                positions: RefCell::default(),
                 errors: Cell::new(0),
             }),
             resources: Vec::new(),
@@ -346,6 +349,7 @@ impl ClientRuntime {
             }
             ServerMessage::PlayerLeft { id } => {
                 s.players.borrow_mut().remove(id);
+                s.positions.borrow_mut().remove(id);
             }
             ServerMessage::Correction { position } => {
                 s.me.borrow_mut().position = *position;
@@ -384,7 +388,16 @@ impl ClientRuntime {
                 }
             }
             ServerMessage::ResourceStop { name } => self.stop(name),
-            ServerMessage::Reject { .. } | ServerMessage::Snapshot { .. } => {}
+            ServerMessage::Snapshot { entities, .. } => {
+                // O snapshot traz todos no raio: quem sumiu dele saiu de perto.
+                let me = s.me.borrow().id;
+                let mut pos = s.positions.borrow_mut();
+                pos.clear();
+                for e in entities.iter().filter(|e| Some(e.id) != me) {
+                    pos.insert(e.id, e.position);
+                }
+            }
+            ServerMessage::Reject { .. } => {}
         }
     }
 
@@ -933,6 +946,42 @@ fn install_api(
                 p.set("id", *id)?;
                 p.set("name", name.as_str())?;
                 out.push(p)?;
+            }
+            Ok(out)
+        })?,
+    )?;
+    let w = Rc::downgrade(shared);
+    players.set(
+        "position",
+        lua.create_function(move |lua, id: PlayerId| {
+            let s = upgrade(&w)?;
+            let p = s.positions.borrow().get(&id).copied();
+            p.map(|p| vec3_table(lua, p)).transpose()
+        })?,
+    )?;
+    let w = Rc::downgrade(shared);
+    players.set(
+        "nearby",
+        lua.create_function(move |lua, radius: f32| {
+            let s = upgrade(&w)?;
+            let me = s.me.borrow().position;
+            let names = s.players.borrow();
+            let mut near: Vec<(f32, PlayerId, Vec3)> = s
+                .positions
+                .borrow()
+                .iter()
+                .map(|(id, p)| (p.distance(me), *id, *p))
+                .filter(|(d, ..)| *d <= radius)
+                .collect();
+            near.sort_by(|a, b| a.0.total_cmp(&b.0).then(a.1.cmp(&b.1)));
+            let out = lua.create_table()?;
+            for (d, id, p) in near {
+                let t = lua.create_table()?;
+                t.set("id", id)?;
+                t.set("name", names.get(&id).map(String::as_str).unwrap_or(""))?;
+                t.set("position", vec3_table(lua, p)?)?;
+                t.set("distance", d)?;
+                out.push(t)?;
             }
             Ok(out)
         })?,

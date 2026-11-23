@@ -407,6 +407,67 @@ fn markers_zones_and_camera() {
 }
 
 #[test]
+fn nearby_players_come_from_snapshots() {
+    use hexmp_protocol::EntityState;
+    let mut rt = ClientRuntime::default();
+    start(
+        &mut rt,
+        "radar",
+        r#"events.on("ver", function(r)
+            local out = {}
+            for _, p in players.nearby(r) do
+                table.insert(out, p.name .. "@" .. math.floor(p.distance))
+            end
+            ui.send(table.concat(out, ","))
+            ui.send(players.position(2) ~= nil)
+        end)"#,
+    );
+    rt.handle(&ServerMessage::Welcome {
+        player_id: 1,
+        tick_rate: 30,
+        spawn: Vec3::ZERO,
+    });
+    for (id, name) in [(2, "Bia"), (3, "Caio")] {
+        rt.handle(&ServerMessage::PlayerJoined {
+            id,
+            name: name.into(),
+        });
+    }
+    let snap = |rt: &mut ClientRuntime, list: &[(PlayerId, f32)]| {
+        let mut entities: Vec<EntityState> = list
+            .iter()
+            .map(|(id, x)| EntityState {
+                id: *id,
+                position: Vec3::new(*x, 0.0, 0.0),
+            })
+            .collect();
+        entities.push(EntityState {
+            id: 1,
+            position: Vec3::ZERO,
+        });
+        rt.handle(&ServerMessage::Snapshot { tick: 1, entities });
+    };
+    let ver = |rt: &mut ClientRuntime, r: f64| -> Vec<ScriptValue> {
+        rt.emit("ver", &[ScriptValue::Number(r)]);
+        rt.drain_ui().into_iter().map(|m| m.data).collect()
+    };
+    snap(&mut rt, &[(3, 30.0), (2, 10.0)]);
+    assert_eq!(
+        ver(&mut rt, 100.0),
+        [s("Bia@10,Caio@30"), ScriptValue::Bool(true)]
+    );
+    assert_eq!(ver(&mut rt, 20.0), [s("Bia@10"), ScriptValue::Bool(true)]);
+    // Bia saiu do raio do servidor: some do cliente.
+    snap(&mut rt, &[(3, 30.0)]);
+    assert_eq!(
+        ver(&mut rt, 100.0),
+        [s("Caio@30"), ScriptValue::Bool(false)]
+    );
+    rt.handle(&ServerMessage::PlayerLeft { id: 3 });
+    assert_eq!(ver(&mut rt, 100.0), [s(""), ScriptValue::Bool(false)]);
+}
+
+#[test]
 fn zone_replaced_inside_its_own_handler() {
     let mut rt = ClientRuntime::default();
     start(
