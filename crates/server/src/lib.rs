@@ -369,6 +369,9 @@ impl<T: Transport> GameServer<T> {
                         self.send(client, &ServerMessage::Correction { position });
                     }
                 }
+                Command::Hide { player, hidden } => {
+                    let _ = self.world.set_hidden(player, hidden);
+                }
                 Command::ResourceStarted { name } => {
                     if let Some(msg) = self
                         .scripts
@@ -630,7 +633,9 @@ impl<T: Transport> GameServer<T> {
             let Some(center) = self.world.player(id).map(|p| p.position) else {
                 continue;
             };
-            let entities = self.world.visible_from(center, self.config.interest_radius);
+            let entities = self
+                .world
+                .visible_from(id, center, self.config.interest_radius);
             self.send(client, &ServerMessage::Snapshot { tick, entities });
         }
     }

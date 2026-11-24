@@ -403,6 +403,17 @@ fn shop_over_the_network_with_rp_kit() {
     );
     new_character(&mut bots);
     pump(&mut bots, Duration::from_millis(2100), |_| false);
+    // Quem está na tela de personagens não aparece para ninguém, nem vê ninguém.
+    let mut other = join(&server, "outro", 4001);
+    pump(&mut other, Duration::from_millis(500), |_| false);
+    pump(&mut bots, Duration::from_millis(300), |_| false);
+    assert_eq!(bots[0].stats.visible_entities, 1);
+    assert_eq!(other[0].stats.visible_entities, 1);
+    new_character(&mut other);
+    pump(&mut other, Duration::from_millis(300), |_| false);
+    pump(&mut bots, Duration::from_millis(300), |_| false);
+    assert_eq!(bots[0].stats.visible_entities, 2, "com personagem, aparece");
+    drop_bot(other.pop().unwrap());
     // O personagem nasce longe da loja.
     walk_to(&mut bots, 12.0, 6.0);
 

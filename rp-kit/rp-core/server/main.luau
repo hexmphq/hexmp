@@ -7,7 +7,8 @@
 --          → módulo chama exports "rp-core".moduleReady(playerId, nome)
 --          → quando todos responderam: "rp:characterLoaded"(playerId, char) e o RPC responde.
 --   saída/logout → "rp:characterUnloading"(playerId, char): módulos gravam e liberam memória.
---   Sem personagem, o jogador fica travado (players.freeze): não anda pelo mundo na tela de escolha.
+--   Sem personagem, o jogador fica travado (players.freeze) e escondido (players.hide): não anda
+--   pelo mundo na tela de escolha, não aparece para os outros e não vê ninguém.
 
 type Vec = { x: number, y: number, z: number }
 type Character = {
@@ -101,6 +102,7 @@ local function finishLoading(playerId: number)
     active[playerId] = l.char
     players.setPosition(playerId, l.char.position)
     players.freeze(playerId, false)
+    players.hide(playerId, false)
     events.emit("rp:characterLoaded", playerId, l.char)
     net.emit(playerId, "rp:characterLoaded", summary(l.char))
     l.reply.ok(summary(l.char))
@@ -117,6 +119,7 @@ local function unload(playerId: number)
     db.execute(st[1], st[2])
     active[playerId] = nil
     players.freeze(playerId, true)
+    players.hide(playerId, true)
     net.emit(playerId, "rp:characterUnloaded")
 end
 
@@ -292,6 +295,7 @@ end)
 
 events.on("playerJoined", function(player)
     players.freeze(player.id, true)
+    players.hide(player.id, true)
 end)
 
 events.on("playerDropped", function(player)
@@ -307,6 +311,7 @@ events.on("resourceStop", function(name)
         -- Sem o rp-core, ninguém escolheria personagem: solta todo mundo.
         for _, p in players.list() do
             players.freeze(p.id, false)
+            players.hide(p.id, false)
         end
     else
         -- Módulo parou: não esperar mais por ele.
@@ -323,6 +328,7 @@ end)
 -- Quem já estava no servidor quando o recurso (re)iniciou ainda não tem personagem.
 for _, p in players.list() do
     players.freeze(p.id, true)
+    players.hide(p.id, true)
 end
 
 -- Gravação em lote das posições.

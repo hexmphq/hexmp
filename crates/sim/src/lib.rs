@@ -25,6 +25,8 @@ pub struct Player {
     pub rejected_moves: u32,
     /// Travado por script: nenhum movimento do cliente é aceito.
     pub frozen: bool,
+    /// Fora do mundo dos outros: ninguém o vê e ele não vê ninguém.
+    pub hidden: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -67,6 +69,7 @@ impl World {
             last_move_tick: self.tick,
             rejected_moves: 0,
             frozen: false,
+            hidden: false,
         };
         self.players.entry(id).or_insert(player)
     }
@@ -136,10 +139,22 @@ impl World {
         Ok(())
     }
 
+    /// Esconde (ou mostra) o jogador dos outros, e os outros dele.
+    pub fn set_hidden(&mut self, id: PlayerId, hidden: bool) -> Result<(), MoveError> {
+        self.players
+            .get_mut(&id)
+            .ok_or(MoveError::UnknownPlayer)?
+            .hidden = hidden;
+        Ok(())
+    }
+
     /// Jogadores dentro do raio. Linear por enquanto; grade espacial depois.
-    pub fn visible_from(&self, center: Vec3, radius: f32) -> Vec<EntityState> {
+    /// `viewer` sempre se vê; escondidos só veem a si mesmos e só são vistos por si.
+    pub fn visible_from(&self, viewer: PlayerId, center: Vec3, radius: f32) -> Vec<EntityState> {
+        let alone = self.players.get(&viewer).is_some_and(|p| p.hidden);
         self.players
             .values()
+            .filter(|p| p.id == viewer || (!alone && !p.hidden))
             .filter(|p| p.position.distance(center) <= radius)
             .map(|p| EntityState {
                 id: p.id,
@@ -253,12 +268,25 @@ mod tests {
             w.step();
         }
         w.try_move(far, Vec3::new(1000.0, 0.0, 0.0)).unwrap();
-        let ids: Vec<_> = w
-            .visible_from(Vec3::ZERO, 500.0)
-            .iter()
-            .map(|e| e.id)
-            .collect();
-        assert_eq!(ids, vec![near]);
+        let ids = |w: &World, viewer| -> Vec<PlayerId> {
+            let mut v: Vec<_> = w
+                .visible_from(viewer, Vec3::ZERO, 500.0)
+                .iter()
+                .map(|e| e.id)
+                .collect();
+            v.sort();
+            v
+        };
+        assert_eq!(ids(&w, near), vec![near]);
+        // Escondido: some para os outros, e só vê a si mesmo.
+        let other = w.spawn_player("outro".into()).id;
+        assert_eq!(ids(&w, near), vec![near, other]);
+        w.set_hidden(other, true).unwrap();
+        assert_eq!(ids(&w, near), vec![near]);
+        assert_eq!(ids(&w, other), vec![other]);
+        w.set_hidden(other, false).unwrap();
+        assert_eq!(ids(&w, other), vec![near, other]);
+        assert!(w.set_hidden(999, true).is_err());
     }
 
     #[test]

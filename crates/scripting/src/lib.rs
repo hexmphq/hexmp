@@ -77,6 +77,11 @@ pub enum Command {
         player: PlayerId,
         frozen: bool,
     },
+    /// Esconde (ou mostra) o jogador dos outros.
+    Hide {
+        player: PlayerId,
+        hidden: bool,
+    },
     /// Recurso com parte de cliente iniciou: mande [`ScriptEngine::client_bundle`] a todos.
     ResourceStarted {
         name: String,
@@ -1189,6 +1194,17 @@ fn install_api(lua: &Lua, resource: &Rc<str>, shared: &Rc<Shared>) -> mlua::Resu
                 .outbox
                 .borrow_mut()
                 .push(Command::Freeze { player: id, frozen });
+            Ok(())
+        })?,
+    )?;
+    let w = Rc::downgrade(shared);
+    players.set(
+        "hide",
+        lua.create_function(move |_, (id, hidden): (PlayerId, bool)| {
+            upgrade(&w)?
+                .outbox
+                .borrow_mut()
+                .push(Command::Hide { player: id, hidden });
             Ok(())
         })?,
     )?;

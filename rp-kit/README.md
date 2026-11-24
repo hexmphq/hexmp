@@ -30,7 +30,7 @@ As tabelas são criadas pelas migrações de cada recurso (`sql/*.sql`) na prime
 
 ## Fluxo de personagem
 
-Sem personagem, o jogador fica travado (`players.freeze`): o servidor recusa o movimento até ele escolher um. Excluir só marca `deleted_at`; o registro e os dados dos módulos continuam no banco.
+Sem personagem, o jogador fica travado (`players.freeze`) e escondido (`players.hide`): o servidor recusa o movimento, não o mostra a ninguém e não lhe mostra ninguém até ele escolher um. Excluir só marca `deleted_at`; o registro e os dados dos módulos continuam no banco.
 
 ```
 cliente: rp.characters.select(id)

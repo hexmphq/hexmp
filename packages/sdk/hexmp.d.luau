@@ -69,6 +69,9 @@ declare players: {
     --- Trava (`true`) ou solta o jogador: travado, o servidor recusa todo movimento do cliente
     --- e o devolve ao lugar. `setPosition` continua funcionando.
     freeze: (id: number, frozen: boolean) -> (),
+    --- Esconde (`true`) ou mostra o jogador: escondido, os outros não o recebem nos snapshots e
+    --- ele não recebe os outros. Útil em telas fora do jogo (escolha de personagem).
+    hide: (id: number, hidden: boolean) -> (),
     --- Teleporta (sem validação de velocidade).
     setPosition: (id: number, position: Vec3) -> (),
 }
