@@ -12,7 +12,7 @@ use hexmp_db::{Db, Request, Ticket};
 use hexmp_protocol::{
     ClientMessage, MAX_NAME_LEN, PROTOCOL_VERSION, Payload, PlayerId, ServerMessage, decode, encode,
 };
-use hexmp_scripting::{Command, PlayerInfo, RpcOutcome, ScriptEngine, Target};
+use hexmp_scripting::{Command, PlayerInfo, RpcOutcome, ScriptEngine, Target, VehicleInfo};
 use hexmp_sim::World;
 use serde_json::json;
 use std::collections::HashMap;
@@ -384,6 +384,38 @@ impl<T: Transport> GameServer<T> {
                         }
                     }
                 }
+                Command::SpawnVehicle {
+                    id,
+                    model,
+                    position,
+                    heading,
+                    world,
+                } => {
+                    if let Err(e) = self
+                        .world
+                        .spawn_vehicle(id, model, position, heading, world)
+                    {
+                        tracing::warn!("veículo {id} não criado: {e:?}");
+                    }
+                }
+                Command::RemoveVehicle { id } => {
+                    self.world.remove_vehicle(id);
+                }
+                Command::SetDriver { vehicle, driver } => {
+                    match self.world.set_driver(vehicle, driver) {
+                        Ok(()) => {
+                            // Entrou: o cliente vai para o banco do motorista.
+                            if let Some(p) = driver
+                                && let (Some(client), Some(pl)) =
+                                    (self.client_of(p), self.world.player(p))
+                            {
+                                let position = pl.position;
+                                self.send(client, &ServerMessage::Correction { position });
+                            }
+                        }
+                        Err(e) => tracing::warn!("motorista do veículo {vehicle}: {e:?}"),
+                    }
+                }
                 Command::SetWorld { player, world } => {
                     let _ = self.world.set_world(player, world);
                 }
@@ -420,6 +452,21 @@ impl<T: Transport> GameServer<T> {
                     }
                 }
             }
+        }
+        let vehicles: Vec<VehicleInfo> = self
+            .world
+            .vehicles()
+            .map(|v| VehicleInfo {
+                id: v.id,
+                model: v.model.clone(),
+                position: v.position,
+                heading: v.heading,
+                world: v.world,
+                driver: v.driver,
+            })
+            .collect();
+        if let Some(engine) = &mut self.scripts {
+            engine.sync_vehicles(vehicles);
         }
     }
 
@@ -652,10 +699,17 @@ impl<T: Transport> GameServer<T> {
             let Some(center) = self.world.player(id).map(|p| p.position) else {
                 continue;
             };
-            let entities = self
-                .world
-                .visible_from(id, center, self.config.interest_radius);
-            self.send(client, &ServerMessage::Snapshot { tick, entities });
+            let radius = self.config.interest_radius;
+            let entities = self.world.visible_from(id, center, radius);
+            let vehicles = self.world.visible_vehicles(id, center, radius);
+            self.send(
+                client,
+                &ServerMessage::Snapshot {
+                    tick,
+                    entities,
+                    vehicles,
+                },
+            );
         }
     }
 

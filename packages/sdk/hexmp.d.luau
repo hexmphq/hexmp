@@ -64,6 +64,32 @@ declare timer: {
     cancel: (id: number) -> boolean,
 }
 
+export type Vehicle = {
+    id: number,
+    model: string,
+    position: Vec3,
+    --- Graus, 0 = norte (+y), sentido horário.
+    heading: number,
+    world: number,
+    --- Id do jogador ao volante, ou nil.
+    driver: number?,
+}
+
+--- Veículos do servidor. Os criados por um recurso somem quando ele para.
+declare vehicles: {
+    --- Cria e devolve o id. `model`: 1 a 32 letras, números, _ ou -. Até 256 por recurso.
+    spawn: (model: string, position: Vec3, opts: { heading: number?, world: number? }?) -> number,
+    remove: (id: number) -> boolean,
+    get: (id: number) -> Vehicle?,
+    list: () -> { Vehicle },
+    --- Veículo que o jogador dirige.
+    driving: (player: number) -> number?,
+    --- Põe (o jogador vai para o veículo) ou tira (`nil`) o motorista. Erro se o veículo está
+    --- ocupado, em outro mundo, ou se o jogador já dirige outro. Quem dirige leva o veículo
+    --- junto ao andar; trocar de mundo ou sair do servidor tira do volante.
+    setDriver: (id: number, player: number?) -> (),
+}
+
 declare players: {
     get: (id: number) -> Player?,
     list: () -> { Player },

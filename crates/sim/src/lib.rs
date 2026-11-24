@@ -1,7 +1,7 @@
 //! Mundo da simulação: jogadores, validação de movimento e consulta por área.
 //! Será migrado para bevy_ecs + grade espacial quando houver mais tipos de entidade.
 
-use hexmp_protocol::{EntityState, PlayerId, Vec3};
+use hexmp_protocol::{EntityState, PlayerId, Vec3, VehicleId, VehicleState};
 use std::collections::HashMap;
 
 /// Velocidade máxima aceita (m/s). Cobre carro rápido; aviões terão regra própria.
@@ -40,6 +40,39 @@ impl Player {
     }
 }
 
+#[derive(Debug, Clone)]
+pub struct Vehicle {
+    pub id: VehicleId,
+    pub model: String,
+    pub position: Vec3,
+    /// Graus, 0 = norte (+y), sentido horário.
+    pub heading: f32,
+    pub world: u32,
+    pub driver: Option<PlayerId>,
+}
+
+impl Vehicle {
+    pub fn state(&self) -> VehicleState {
+        VehicleState {
+            id: self.id,
+            model: self.model.clone(),
+            position: self.position,
+            heading: self.heading,
+            driver: self.driver,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum VehicleError {
+    UnknownVehicle,
+    UnknownPlayer,
+    InvalidPosition,
+    Occupied,
+    AlreadyDriving,
+    OtherWorld,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MoveError {
     UnknownPlayer,
@@ -54,6 +87,7 @@ pub struct World {
     pub tick_rate: u32,
     players: HashMap<PlayerId, Player>,
     next_id: PlayerId,
+    vehicles: HashMap<VehicleId, Vehicle>,
 }
 
 impl World {
@@ -63,6 +97,7 @@ impl World {
             tick_rate,
             players: HashMap::new(),
             next_id: 1,
+            vehicles: HashMap::new(),
         }
     }
 
@@ -88,7 +123,95 @@ impl World {
     }
 
     pub fn despawn_player(&mut self, id: PlayerId) -> Option<Player> {
+        self.leave_vehicle(id);
         self.players.remove(&id)
+    }
+
+    /// Cria (ou troca) o veículo com este id.
+    pub fn spawn_vehicle(
+        &mut self,
+        id: VehicleId,
+        model: String,
+        position: Vec3,
+        heading: f32,
+        world: u32,
+    ) -> Result<(), VehicleError> {
+        if !valid_position(position) || !heading.is_finite() {
+            return Err(VehicleError::InvalidPosition);
+        }
+        self.vehicles.insert(
+            id,
+            Vehicle {
+                id,
+                model,
+                position,
+                heading: heading.rem_euclid(360.0),
+                world,
+                driver: None,
+            },
+        );
+        Ok(())
+    }
+
+    pub fn remove_vehicle(&mut self, id: VehicleId) -> Option<Vehicle> {
+        self.vehicles.remove(&id)
+    }
+
+    pub fn vehicle(&self, id: VehicleId) -> Option<&Vehicle> {
+        self.vehicles.get(&id)
+    }
+
+    pub fn vehicles(&self) -> impl Iterator<Item = &Vehicle> {
+        self.vehicles.values()
+    }
+
+    /// Veículo que o jogador dirige.
+    pub fn driving(&self, player: PlayerId) -> Option<VehicleId> {
+        self.vehicles
+            .values()
+            .find(|v| v.driver == Some(player))
+            .map(|v| v.id)
+    }
+
+    fn leave_vehicle(&mut self, player: PlayerId) {
+        for v in self.vehicles.values_mut() {
+            if v.driver == Some(player) {
+                v.driver = None;
+            }
+        }
+    }
+
+    /// Põe (ou tira) o motorista. Ao entrar, o jogador vai para o veículo.
+    pub fn set_driver(
+        &mut self,
+        id: VehicleId,
+        driver: Option<PlayerId>,
+    ) -> Result<(), VehicleError> {
+        let v = self.vehicles.get(&id).ok_or(VehicleError::UnknownVehicle)?;
+        let Some(p) = driver else {
+            self.vehicles.get_mut(&id).unwrap().driver = None;
+            return Ok(());
+        };
+        let player = self.players.get(&p).ok_or(VehicleError::UnknownPlayer)?;
+        if v.driver == Some(p) {
+            return Ok(());
+        }
+        if v.driver.is_some() {
+            return Err(VehicleError::Occupied);
+        }
+        if player.world != v.world {
+            return Err(VehicleError::OtherWorld);
+        }
+        if self.driving(p).is_some() {
+            return Err(VehicleError::AlreadyDriving);
+        }
+        let at = v.position;
+        self.vehicles.get_mut(&id).unwrap().driver = Some(p);
+        let tick = self.tick;
+        let player = self.players.get_mut(&p).unwrap();
+        player.position = at;
+        player.last_move_tick = tick;
+        Ok(())
     }
 
     pub fn player(&self, id: PlayerId) -> Option<&Player> {
@@ -125,8 +248,17 @@ impl World {
             return Err(MoveError::TooFast);
         }
 
+        let from = p.position;
         p.position = to;
         p.last_move_tick = tick;
+        // Quem dirige leva o veículo junto; a frente segue o movimento.
+        if let Some(v) = self.vehicles.values_mut().find(|v| v.driver == Some(id)) {
+            let (dx, dy) = (to.x - from.x, to.y - from.y);
+            if dx.hypot(dy) > 0.01 {
+                v.heading = dx.atan2(dy).to_degrees().rem_euclid(360.0);
+            }
+            v.position = to;
+        }
         Ok(())
     }
 
@@ -140,6 +272,9 @@ impl World {
         }
         p.position = to;
         p.last_move_tick = tick;
+        if let Some(v) = self.vehicles.values_mut().find(|v| v.driver == Some(id)) {
+            v.position = to;
+        }
         Ok(())
     }
 
@@ -167,6 +302,11 @@ impl World {
 
     /// Muda o mundo (dimensão) do jogador.
     pub fn set_world(&mut self, id: PlayerId, world: u32) -> Result<(), MoveError> {
+        if !self.players.contains_key(&id) {
+            return Err(MoveError::UnknownPlayer);
+        }
+        // O veículo não vai junto: o jogador desce.
+        self.leave_vehicle(id);
         self.players
             .get_mut(&id)
             .ok_or(MoveError::UnknownPlayer)?
@@ -199,11 +339,92 @@ impl World {
             })
             .collect()
     }
+
+    /// Veículos dentro do raio, no mundo de `viewer`. Escondidos não veem veículos.
+    pub fn visible_vehicles(
+        &self,
+        viewer: PlayerId,
+        center: Vec3,
+        radius: f32,
+    ) -> Vec<VehicleState> {
+        let Some(me) = self.players.get(&viewer) else {
+            return Vec::new();
+        };
+        if me.hidden {
+            return Vec::new();
+        }
+        let mut out: Vec<VehicleState> = self
+            .vehicles
+            .values()
+            .filter(|v| v.world == me.world && v.position.distance(center) <= radius)
+            .map(Vehicle::state)
+            .collect();
+        out.sort_by_key(|v| v.id);
+        out
+    }
+}
+
+fn valid_position(p: Vec3) -> bool {
+    p.is_finite() && [p.x, p.y, p.z].iter().all(|v| v.abs() <= WORLD_LIMIT)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn driver_takes_the_vehicle_along() {
+        let mut w = World::new(30);
+        let ana = w.spawn_player("ana".into()).id;
+        let bia = w.spawn_player("bia".into()).id;
+        w.spawn_vehicle(7, "sedan".into(), Vec3::new(5.0, 0.0, 0.0), 0.0, 0)
+            .unwrap();
+        assert_eq!(
+            w.set_driver(8, Some(ana)),
+            Err(VehicleError::UnknownVehicle)
+        );
+        w.set_driver(7, Some(ana)).unwrap();
+        assert_eq!(w.player(ana).unwrap().position.x, 5.0, "entra no carro");
+        assert_eq!(w.set_driver(7, Some(bia)), Err(VehicleError::Occupied));
+        w.spawn_vehicle(9, "sedan".into(), Vec3::ZERO, 0.0, 0)
+            .unwrap();
+        assert_eq!(
+            w.set_driver(9, Some(ana)),
+            Err(VehicleError::AlreadyDriving)
+        );
+
+        w.tick += 30;
+        w.try_move(ana, Vec3::new(5.0, 20.0, 0.0)).unwrap();
+        let v = w.vehicle(7).unwrap();
+        assert_eq!((v.position.y, v.heading), (20.0, 0.0));
+        w.tick += 30;
+        w.try_move(ana, Vec3::new(25.0, 20.0, 0.0)).unwrap();
+        assert_eq!(w.vehicle(7).unwrap().heading, 90.0, "virou para leste");
+
+        // Desceu: o carro fica.
+        w.set_driver(7, None).unwrap();
+        w.tick += 30;
+        w.try_move(ana, Vec3::new(30.0, 20.0, 0.0)).unwrap();
+        assert_eq!(w.vehicle(7).unwrap().position.x, 25.0);
+
+        // Outro mundo: não vê nem entra; trocar de mundo tira do volante.
+        w.set_world(bia, 3).unwrap();
+        assert!(w.visible_vehicles(bia, Vec3::ZERO, 500.0).is_empty());
+        assert_eq!(w.visible_vehicles(ana, Vec3::ZERO, 500.0).len(), 2);
+        assert_eq!(w.set_driver(7, Some(bia)), Err(VehicleError::OtherWorld));
+        w.set_driver(7, Some(ana)).unwrap();
+        w.set_world(ana, 3).unwrap();
+        assert_eq!(w.driving(ana), None);
+        // Sair do servidor também.
+        w.set_world(ana, 0).unwrap();
+        w.set_driver(7, Some(ana)).unwrap();
+        w.despawn_player(ana);
+        assert_eq!(w.vehicle(7).unwrap().driver, None);
+        assert!(
+            w.spawn_vehicle(1, "x".into(), Vec3::new(f32::NAN, 0.0, 0.0), 0.0, 0)
+                .is_err()
+        );
+    }
 
     #[test]
     fn frozen_player_cannot_move_but_can_be_teleported() {

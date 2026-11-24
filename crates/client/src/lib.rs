@@ -73,7 +73,7 @@ impl Client {
                     self.correction = Some(*spawn);
                 }
                 ServerMessage::Correction { position } => self.correction = Some(*position),
-                ServerMessage::Snapshot { tick, entities } => {
+                ServerMessage::Snapshot { tick, entities, .. } => {
                     if let Some(me) = self.player_id() {
                         self.remotes.push(*tick, entities, me);
                     }

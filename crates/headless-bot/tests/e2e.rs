@@ -451,6 +451,63 @@ fn chat_reaches_only_who_is_near() {
 }
 
 #[test]
+fn driving_a_car_moves_it() {
+    let db = temp_db("cars");
+    let server = RunningServer::with_rp_kit(&db);
+    let mut bots = join(&server, "motorista", 4400);
+    let fail = |e: &str| Err(e.to_string());
+    assert_eq!(
+        call(&mut bots, "cars.toggle", &[]),
+        fail("selecione um personagem")
+    );
+    new_character(&mut bots);
+    walk_to(&mut bots, 0.0, 0.0);
+    assert_eq!(
+        call(&mut bots, "cars.toggle", &[]),
+        fail("nenhum carro livre por perto")
+    );
+    assert_eq!(bots[0].vehicles.len(), 3, "os 3 carros do exemplo");
+
+    walk_to(&mut bots, 6.0, -5.0);
+    let car = match ok1(call(&mut bots, "cars.toggle", &[])) {
+        ScriptValue::Number(n) => n as u32,
+        o => panic!("{o:?}"),
+    };
+    pump(&mut bots, Duration::from_millis(300), |_| false);
+    assert_eq!(
+        bots[0].position,
+        Vec3::new(6.0, -6.0, 0.0),
+        "foi para o banco"
+    );
+    let me = bots[0].player_id;
+
+    // Dirige para o norte: o carro vai junto e vira para lá.
+    walk_to(&mut bots, 6.0, 20.0);
+    let v = bots[0]
+        .vehicles
+        .iter()
+        .find(|v| v.id == car)
+        .unwrap()
+        .clone();
+    assert_eq!(
+        (v.position, v.heading, v.driver),
+        (Vec3::new(6.0, 20.0, 0.0), 0.0, me)
+    );
+
+    // Sai: desce à esquerda (oeste, olhando para o norte) e o carro fica.
+    assert_eq!(call(&mut bots, "cars.toggle", &[]), Ok(vec![ScriptValue::Nil]));
+    pump(&mut bots, Duration::from_millis(300), |_| false);
+    assert!(
+        bots[0].position.distance(Vec3::new(4.0, 20.0, 0.0)) < 0.01,
+        "{:?}",
+        bots[0].position
+    );
+    walk_to(&mut bots, 0.0, 20.0);
+    let v = bots[0].vehicles.iter().find(|v| v.id == car).unwrap();
+    assert_eq!((v.position, v.driver), (Vec3::new(6.0, 20.0, 0.0), None));
+}
+
+#[test]
 fn delivery_job_pays_once_and_only_at_the_address() {
     let db = temp_db("delivery");
     let server = RunningServer::with_rp_kit(&db);

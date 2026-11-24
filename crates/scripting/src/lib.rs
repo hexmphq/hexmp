@@ -18,7 +18,7 @@ use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::path::{Path, PathBuf};
 use std::rc::{Rc, Weak};
 use std::time::{Duration, Instant, SystemTime};
-use value::{args_to_lua, args_to_script, error_message};
+use value::{args_to_lua, args_to_script, error_message, to_lua};
 
 #[derive(Debug, Clone)]
 pub struct EngineConfig {
@@ -38,6 +38,17 @@ impl Default for EngineConfig {
             max_event_depth: 16,
         }
     }
+}
+
+/// Veículo como os scripts do servidor o veem.
+#[derive(Debug, Clone, PartialEq)]
+pub struct VehicleInfo {
+    pub id: u32,
+    pub model: String,
+    pub position: Vec3,
+    pub heading: f32,
+    pub world: u32,
+    pub driver: Option<PlayerId>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -83,6 +94,22 @@ pub enum Command {
     SetDisplayName {
         player: PlayerId,
         name: Option<String>,
+    },
+    /// Cria um veículo (o id já foi escolhido pelo motor).
+    SpawnVehicle {
+        id: u32,
+        model: String,
+        position: Vec3,
+        heading: f32,
+        world: u32,
+    },
+    RemoveVehicle {
+        id: u32,
+    },
+    /// Põe ou tira o motorista.
+    SetDriver {
+        vehicle: u32,
+        driver: Option<PlayerId>,
     },
     /// Põe o jogador em outro mundo (dimensão).
     SetWorld {
@@ -169,6 +196,9 @@ struct Shared {
     clock: Cell<Duration>,
     event_depth: Cell<u32>,
     players: RefCell<BTreeMap<PlayerId, PlayerInfo>>,
+    /// Veículos (espelho do servidor) e o recurso que criou cada um.
+    vehicles: RefCell<BTreeMap<u32, (VehicleInfo, Rc<str>)>>,
+    next_vehicle: Cell<u32>,
     outbox: RefCell<Vec<Command>>,
     handlers: RefCell<HashMap<String, Vec<Rc<Handler>>>>,
     exports: RefCell<HashMap<(String, String), Rc<Handler>>>,
@@ -377,6 +407,8 @@ impl ScriptEngine {
                 clock: Cell::new(Duration::ZERO),
                 event_depth: Cell::new(0),
                 players: RefCell::new(BTreeMap::new()),
+                vehicles: RefCell::new(BTreeMap::new()),
+                next_vehicle: Cell::new(1),
                 outbox: RefCell::new(Vec::new()),
                 handlers: RefCell::new(HashMap::new()),
                 exports: RefCell::new(HashMap::new()),
@@ -613,6 +645,22 @@ impl ScriptEngine {
         };
         self.emit("resourceStop", &[ScriptValue::String(name.into())]);
         self.shared.remove_resource(name);
+        // Veículos do recurso somem com ele.
+        let mine: Vec<u32> = self
+            .shared
+            .vehicles
+            .borrow()
+            .iter()
+            .filter(|(_, (_, owner))| &**owner == name)
+            .map(|(id, _)| *id)
+            .collect();
+        for id in mine {
+            self.shared.vehicles.borrow_mut().remove(&id);
+            self.shared
+                .outbox
+                .borrow_mut()
+                .push(Command::RemoveVehicle { id });
+        }
         let removed = self.running.remove(pos);
         if removed.client.is_some() {
             self.shared
@@ -913,6 +961,18 @@ impl ScriptEngine {
             .collect()
     }
 
+    /// Estado dos veículos no servidor, depois de aplicar os comandos do tick.
+    pub fn sync_vehicles(&mut self, list: Vec<VehicleInfo>) {
+        let mut all = self.shared.vehicles.borrow_mut();
+        let old = std::mem::take(&mut *all);
+        for v in list {
+            let owner = old
+                .get(&v.id)
+                .map_or_else(|| Rc::from(""), |(_, o)| o.clone());
+            all.insert(v.id, (v, owner));
+        }
+    }
+
     pub fn drain_commands(&mut self) -> Vec<Command> {
         std::mem::take(&mut *self.shared.outbox.borrow_mut())
     }
@@ -925,6 +985,30 @@ impl Drop for ScriptEngine {
         }
     }
 }
+
+fn vec3_value(p: Vec3) -> ScriptValue {
+    ScriptValue::Map(vec![
+        ("x".into(), ScriptValue::Number(p.x as f64)),
+        ("y".into(), ScriptValue::Number(p.y as f64)),
+        ("z".into(), ScriptValue::Number(p.z as f64)),
+    ])
+}
+
+fn vehicle_value(v: &VehicleInfo) -> ScriptValue {
+    let mut out = vec![
+        ("id".into(), ScriptValue::Number(v.id as f64)),
+        ("model".into(), ScriptValue::String(v.model.clone())),
+        ("position".into(), vec3_value(v.position)),
+        ("heading".into(), ScriptValue::Number(v.heading as f64)),
+        ("world".into(), ScriptValue::Number(v.world as f64)),
+    ];
+    if let Some(d) = v.driver {
+        out.push(("driver".into(), ScriptValue::Number(d as f64)));
+    }
+    ScriptValue::Map(out)
+}
+
+const MAX_VEHICLES_PER_RESOURCE: usize = 256;
 
 fn player_value(p: &PlayerInfo) -> ScriptValue {
     ScriptValue::Map(vec![
@@ -1278,6 +1362,145 @@ fn install_api(lua: &Lua, resource: &Rc<str>, shared: &Rc<Shared>) -> mlua::Resu
         })?,
     )?;
     g.set("players", players)?;
+
+    // vehicles: o servidor é o dono; o motor guarda um espelho atualizado a cada tick.
+    let vehicles = lua.create_table()?;
+    let (w, r) = (Rc::downgrade(shared), resource.clone());
+    vehicles.set(
+        "spawn",
+        lua.create_function(
+            move |_, (model, pos, opts): (String, mlua::Table, Option<mlua::Table>)| {
+                let s = upgrade(&w)?;
+                let ok_model = (1..=32).contains(&model.len())
+                    && model
+                        .chars()
+                        .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-');
+                if !ok_model {
+                    return Err(rt(
+                        "vehicles.spawn: modelo de 1 a 32 letras, números, _ ou -",
+                    ));
+                }
+                let position = Vec3::new(pos.get("x")?, pos.get("y")?, pos.get("z")?);
+                let (mut heading, mut world) = (0.0f32, 0u32);
+                if let Some(o) = opts {
+                    heading = o.get::<Option<f32>>("heading")?.unwrap_or(0.0);
+                    world = o.get::<Option<u32>>("world")?.unwrap_or(0);
+                }
+                if !position.is_finite() || !heading.is_finite() {
+                    return Err(rt("vehicles.spawn: posição inválida"));
+                }
+                let mine = s
+                    .vehicles
+                    .borrow()
+                    .values()
+                    .filter(|(_, o)| *o == r)
+                    .count();
+                if mine >= MAX_VEHICLES_PER_RESOURCE {
+                    return Err(rt("vehicles.spawn: veículos demais no recurso"));
+                }
+                let id = s.next_vehicle.get();
+                s.next_vehicle.set(id + 1);
+                let info = VehicleInfo {
+                    id,
+                    model: model.clone(),
+                    position,
+                    heading: heading.rem_euclid(360.0),
+                    world,
+                    driver: None,
+                };
+                s.vehicles.borrow_mut().insert(id, (info, r.clone()));
+                s.outbox.borrow_mut().push(Command::SpawnVehicle {
+                    id,
+                    model,
+                    position,
+                    heading,
+                    world,
+                });
+                Ok(id)
+            },
+        )?,
+    )?;
+    let w = Rc::downgrade(shared);
+    vehicles.set(
+        "remove",
+        lua.create_function(move |_, id: u32| {
+            let s = upgrade(&w)?;
+            let found = s.vehicles.borrow_mut().remove(&id).is_some();
+            if found {
+                s.outbox.borrow_mut().push(Command::RemoveVehicle { id });
+            }
+            Ok(found)
+        })?,
+    )?;
+    let w = Rc::downgrade(shared);
+    vehicles.set(
+        "get",
+        lua.create_function(move |lua, id: u32| {
+            let s = upgrade(&w)?;
+            let v = s.vehicles.borrow().get(&id).map(|(v, _)| vehicle_value(v));
+            v.map(|v| to_lua(lua, &v)).transpose()
+        })?,
+    )?;
+    let w = Rc::downgrade(shared);
+    vehicles.set(
+        "list",
+        lua.create_function(move |lua, ()| {
+            let s = upgrade(&w)?;
+            let out = lua.create_table()?;
+            for (v, _) in s.vehicles.borrow().values() {
+                out.push(to_lua(lua, &vehicle_value(v))?)?;
+            }
+            Ok(out)
+        })?,
+    )?;
+    let w = Rc::downgrade(shared);
+    vehicles.set(
+        "driving",
+        lua.create_function(move |_, player: PlayerId| {
+            let s = upgrade(&w)?;
+            let id = s
+                .vehicles
+                .borrow()
+                .values()
+                .find(|(v, _)| v.driver == Some(player))
+                .map(|(v, _)| v.id);
+            Ok(id)
+        })?,
+    )?;
+    let w = Rc::downgrade(shared);
+    vehicles.set(
+        "setDriver",
+        lua.create_function(move |_, (id, driver): (u32, Option<PlayerId>)| {
+            let s = upgrade(&w)?;
+            let mut all = s.vehicles.borrow_mut();
+            let world = all.get(&id).map(|(v, _)| v.world);
+            let Some(world) = world else {
+                return Err(rt("vehicles.setDriver: veículo não existe"));
+            };
+            if let Some(p) = driver {
+                let Some(pw) = s.players.borrow().get(&p).map(|p| p.world) else {
+                    return Err(rt("vehicles.setDriver: jogador não existe"));
+                };
+                let current = all[&id].0.driver;
+                if current.is_some() && current != Some(p) {
+                    return Err(rt("vehicles.setDriver: veículo ocupado"));
+                }
+                if pw != world {
+                    return Err(rt("vehicles.setDriver: jogador em outro mundo"));
+                }
+                if all.values().any(|(v, _)| v.id != id && v.driver == Some(p)) {
+                    return Err(rt("vehicles.setDriver: jogador já dirige outro"));
+                }
+            }
+            all.get_mut(&id).unwrap().0.driver = driver;
+            s.outbox.borrow_mut().push(Command::SetDriver {
+                vehicle: id,
+                driver,
+            });
+            Ok(())
+        })?,
+    )?;
+    g.set("vehicles", vehicles)?;
 
     // net
     let net = lua.create_table()?;

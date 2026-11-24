@@ -6,7 +6,7 @@
 
 use crate::keys;
 use hexmp_protocol::{
-    ClientMessage, Payload, PlayerId, ResourceFile, ScriptValue, ServerMessage, Vec3,
+    ClientMessage, Payload, PlayerId, ResourceFile, ScriptValue, ServerMessage, Vec3, VehicleState,
 };
 use hexmp_scripting::value::{args_to_lua, args_to_script, error_message, to_script};
 use mlua::{Function, Lua, Value, Variadic, VmState};
@@ -176,6 +176,8 @@ struct Shared {
     players: RefCell<BTreeMap<PlayerId, String>>,
     /// Outros jogadores no raio de interesse, do último snapshot.
     positions: RefCell<HashMap<PlayerId, Vec3>>,
+    /// Veículos do último snapshot.
+    vehicles: RefCell<Vec<VehicleState>>,
     errors: Cell<u64>,
 }
 
@@ -298,6 +300,7 @@ impl ClientRuntime {
                 me: RefCell::default(),
                 players: RefCell::default(),
                 positions: RefCell::default(),
+                vehicles: RefCell::default(),
                 errors: Cell::new(0),
             }),
             resources: Vec::new(),
@@ -339,6 +342,11 @@ impl ClientRuntime {
             .markers_changed
             .take()
             .then(|| self.shared.markers.borrow().values().cloned().collect())
+    }
+
+    /// Veículos visíveis, do último snapshot.
+    pub fn vehicles(&self) -> Vec<VehicleState> {
+        self.shared.vehicles.borrow().clone()
     }
 
     /// Todos os ícones do mapa, se algo mudou desde a última chamada.
@@ -412,7 +420,10 @@ impl ClientRuntime {
                 }
             }
             ServerMessage::ResourceStop { name } => self.stop(name),
-            ServerMessage::Snapshot { entities, .. } => {
+            ServerMessage::Snapshot {
+                entities, vehicles, ..
+            } => {
+                *s.vehicles.borrow_mut() = vehicles.clone();
                 // O snapshot traz todos no raio: quem sumiu dele saiu de perto.
                 let me = s.me.borrow().id;
                 let mut pos = s.positions.borrow_mut();
@@ -956,7 +967,53 @@ fn install_api(
         "position",
         lua.create_function(move |lua, ()| vec3_table(lua, upgrade(&w)?.me.borrow().position))?,
     )?;
+    let w = Rc::downgrade(shared);
+    me.set(
+        "vehicle",
+        lua.create_function(move |_, ()| {
+            let s = upgrade(&w)?;
+            let me = s.me.borrow().id;
+            let id = s
+                .vehicles
+                .borrow()
+                .iter()
+                .find(|v| me.is_some() && v.driver == me)
+                .map(|v| v.id);
+            Ok(id)
+        })?,
+    )?;
     g.set("me", me)?;
+
+    let vehicles = lua.create_table()?;
+    let w = Rc::downgrade(shared);
+    vehicles.set(
+        "nearby",
+        lua.create_function(move |lua, radius: f32| {
+            let s = upgrade(&w)?;
+            let at = s.me.borrow().position;
+            let mut near: Vec<(f32, VehicleState)> = s
+                .vehicles
+                .borrow()
+                .iter()
+                .map(|v| (v.position.distance(at), v.clone()))
+                .filter(|(d, _)| *d <= radius)
+                .collect();
+            near.sort_by(|a, b| a.0.total_cmp(&b.0).then(a.1.id.cmp(&b.1.id)));
+            let out = lua.create_table()?;
+            for (d, v) in near {
+                let t = lua.create_table()?;
+                t.set("id", v.id)?;
+                t.set("model", v.model.as_str())?;
+                t.set("position", vec3_table(lua, v.position)?)?;
+                t.set("heading", v.heading)?;
+                t.set("driver", v.driver)?;
+                t.set("distance", d)?;
+                out.push(t)?;
+            }
+            Ok(out)
+        })?,
+    )?;
+    g.set("vehicles", vehicles)?;
 
     let players = lua.create_table()?;
     let w = Rc::downgrade(shared);

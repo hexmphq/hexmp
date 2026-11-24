@@ -558,6 +558,7 @@ Feito em novembro de 2026 com a API atual (`hexmp.cfg`, `rp-kit`, `resources`):
 - ~~Marcadores no mundo, áreas (entrar/sair) e direção da câmera~~: feitos (`markers`, `zones`, `camera.heading`). O host desenha (`GameAdapter::set_markers`); a área é conferida no cliente e não vale como validação. Faltam ícones no mapa.
 - Posição dos outros jogadores no cliente: não dá para listar só quem está perto.
 - ~~Andar antes de escolher personagem~~ e ~~excluir personagem~~: feitos (`players.freeze` no `rp-core`; exclusão só marca `deleted_at`). ~~Instanciar na tela de escolha~~: `players.hide` tira o jogador dos snapshots dos outros e os outros dos dele. ~~Mundos separados~~: `players.setWorld(id, n)` (0 = comum); só quem está no mesmo mundo aparece nos snapshots, e `players.get(id).world` deixa as regras de distância conferirem (o `rp-inventory` já confere ao entregar).
+- Veículos (v1): entidades do servidor (`vehicles.spawn/setDriver`), protocolo 3 manda os visíveis no snapshot. Quem dirige leva o carro junto e a frente segue o movimento; a física é do jogo, o servidor só limita velocidade (90 m/s). Falta: passageiros, travas/dono, persistência, estado (dano, combustível) e o modelo não ir em todo snapshot.
 
 ---
 

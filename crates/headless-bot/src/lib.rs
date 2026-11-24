@@ -3,7 +3,7 @@
 
 use hexmp_protocol::{
     Channel, ClientMessage, NETCODE_PROTOCOL_ID, PROTOCOL_VERSION, Payload, PlayerId, ScriptValue,
-    ServerMessage, Vec3, decode, encode,
+    ServerMessage, Vec3, VehicleState, decode, encode,
 };
 use renet2::{ConnectionConfig, DefaultChannel, RenetClient};
 use renet2_netcode::{ClientAuthentication, ConnectToken, NativeSocket, NetcodeClientTransport};
@@ -45,6 +45,8 @@ pub struct Bot {
     pub known_players: HashSet<PlayerId>,
     /// Nome que o servidor mostra de cada um (o do personagem, se houver).
     pub names: HashMap<PlayerId, String>,
+    /// Veículos do último snapshot.
+    pub vehicles: Vec<VehicleState>,
     pub position: Vec3,
     pub stats: BotStats,
     /// Respostas de RPC por id.
@@ -126,6 +128,7 @@ impl Bot {
             rejected: None,
             known_players: HashSet::new(),
             names: HashMap::new(),
+            vehicles: Vec::new(),
             position: Vec3::ZERO,
             stats: BotStats::default(),
             rpc_results: HashMap::new(),
@@ -239,11 +242,16 @@ impl Bot {
                 self.known_players.remove(&id);
                 self.names.remove(&id);
             }
-            ServerMessage::Snapshot { tick, entities } => {
+            ServerMessage::Snapshot {
+                tick,
+                entities,
+                vehicles,
+            } => {
                 // Unreliable pode chegar fora de ordem.
                 if tick >= self.stats.last_snapshot_tick {
                     self.stats.last_snapshot_tick = tick;
                     self.stats.visible_entities = entities.len();
+                    self.vehicles = vehicles;
                 }
                 self.stats.snapshots += 1;
             }

@@ -445,7 +445,11 @@ fn nearby_players_come_from_snapshots() {
             id: 1,
             position: Vec3::ZERO,
         });
-        rt.handle(&ServerMessage::Snapshot { tick: 1, entities });
+        rt.handle(&ServerMessage::Snapshot {
+            tick: 1,
+            entities,
+            vehicles: vec![],
+        });
     };
     let ver = |rt: &mut ClientRuntime, r: f64| -> Vec<ScriptValue> {
         rt.emit("ver", &[ScriptValue::Number(r)]);
@@ -496,6 +500,45 @@ fn blips_on_the_map() {
     start(&mut rt, "loja", code);
     rt.stop_all();
     assert_eq!(rt.take_blips(), Some(vec![]));
+}
+
+#[test]
+fn vehicles_from_snapshots() {
+    use hexmp_protocol::VehicleState;
+    let mut rt = ClientRuntime::default();
+    start(
+        &mut rt,
+        "carro",
+        r#"events.on("ver", function()
+            local out = {}
+            for _, v in vehicles.nearby(10) do
+                table.insert(out, `{v.id}:{v.model}:{math.floor(v.distance)}:{v.driver or "-"}`)
+            end
+            ui.send(table.concat(out, ","))
+            ui.send(me.vehicle() or 0)
+        end)"#,
+    );
+    rt.handle(&ServerMessage::Welcome {
+        player_id: 1,
+        tick_rate: 30,
+        spawn: Vec3::ZERO,
+    });
+    let car = |id, x: f32, driver| VehicleState {
+        id,
+        model: "sedan".into(),
+        position: Vec3::new(x, 0.0, 0.0),
+        heading: 0.0,
+        driver,
+    };
+    rt.handle(&ServerMessage::Snapshot {
+        tick: 1,
+        entities: vec![],
+        vehicles: vec![car(2, 30.0, None), car(5, 3.0, Some(1))],
+    });
+    rt.emit("ver", &[]);
+    let got: Vec<ScriptValue> = rt.drain_ui().into_iter().map(|m| m.data).collect();
+    assert_eq!(got, [s("5:sedan:3:1"), ScriptValue::Number(5.0)]);
+    assert_eq!(rt.vehicles().len(), 2);
 }
 
 #[test]

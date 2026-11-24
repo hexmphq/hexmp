@@ -135,4 +135,4 @@ hexmp-client --server 127.0.0.1:30120 --name Fulano --ui-dir ./ui-recebida
 
 Esse cliente roda os scripts de cliente de verdade e mostra no terminal tudo o que iria para a UI (`[ui recurso] {...}`). Ele também grava as páginas recebidas, para você abrir no navegador. Com servidor em modo seguro, use `--token` com o token devolvido pelo login.
 
-Exemplos: [`rp-kit`](../../rp-kit), [`resources/shop`](../../resources/shop), [`resources/delivery`](../../resources/delivery), [`resources/apartment`](../../resources/apartment) (mundos separados) e [`resources/hud`](../../resources/hud) (cliente + UI).
+Exemplos: [`rp-kit`](../../rp-kit), [`resources/shop`](../../resources/shop), [`resources/delivery`](../../resources/delivery), [`resources/apartment`](../../resources/apartment) (mundos separados), [`resources/cars`](../../resources/cars) (veículos) e [`resources/hud`](../../resources/hud) (cliente + UI).

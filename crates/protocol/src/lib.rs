@@ -5,7 +5,7 @@
 use bitcode::{Decode, Encode};
 
 /// Versão do protocolo. Cliente e servidor precisam bater.
-pub const PROTOCOL_VERSION: u16 = 2;
+pub const PROTOCOL_VERSION: u16 = 3;
 
 /// Identificador do protocolo no netcode ("HEXM" + versão).
 /// Clientes de outro protocolo nem completam o handshake.
@@ -252,6 +252,20 @@ pub struct EntityState {
     pub position: Vec3,
 }
 
+pub type VehicleId = u32;
+
+/// Veículo visível para o cliente.
+#[derive(Debug, Clone, PartialEq, Encode, Decode)]
+pub struct VehicleState {
+    pub id: VehicleId,
+    /// Nome do modelo (o host escolhe como desenhar).
+    pub model: String,
+    pub position: Vec3,
+    /// Graus, 0 = norte (+y), sentido horário.
+    pub heading: f32,
+    pub driver: Option<PlayerId>,
+}
+
 /// Arquivo de um recurso enviado ao cliente (script ou asset da UI).
 #[derive(Debug, Clone, PartialEq, Encode, Decode)]
 pub struct ResourceFile {
@@ -284,6 +298,7 @@ pub enum ServerMessage {
     Snapshot {
         tick: u32,
         entities: Vec<EntityState>,
+        vehicles: Vec<VehicleState>,
     },
     /// O servidor recusou um input e devolve a posição oficial.
     Correction {
@@ -358,6 +373,13 @@ mod tests {
             entities: vec![EntityState {
                 id: 1,
                 position: Vec3::new(5.0, 0.0, -1.0),
+            }],
+            vehicles: vec![VehicleState {
+                id: 3,
+                model: "sedan".into(),
+                position: Vec3::new(1.0, 2.0, 0.0),
+                heading: 90.0,
+                driver: Some(1),
             }],
         };
         let back: ServerMessage = decode(&encode(&m)).unwrap();

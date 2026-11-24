@@ -37,6 +37,13 @@ declare me: {
     --- Id do jogador local (nil antes de entrar no mundo).
     id: () -> number?,
     position: () -> Vec3,
+    --- Id do veículo que você dirige, ou nil.
+    vehicle: () -> number?,
+}
+
+declare vehicles: {
+    --- Veículos a até `radius` metros, do mais perto ao mais longe (do último snapshot).
+    nearby: (radius: number) -> { { id: number, model: string, position: Vec3, heading: number, driver: number?, distance: number } },
 }
 
 declare camera: {
