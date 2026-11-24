@@ -367,6 +367,90 @@ fn apartment_is_a_world_of_its_own() {
 }
 
 #[test]
+fn chat_reaches_only_who_is_near() {
+    let db = temp_db("chat");
+    let server = RunningServer::with_rp_kit(&db);
+    let mut far = join(&server, "longe", 4302);
+    let mut near = join(&server, "perto", 4301);
+    let mut me = join(&server, "falante", 4300);
+    let fail = |e: &str| Err(e.to_string());
+    assert_eq!(
+        call(&mut me, "rp.chat.say", &[s("oi")]),
+        fail("selecione um personagem")
+    );
+    for b in [&mut far, &mut near, &mut me] {
+        new_character(b);
+    }
+    walk_to(&mut far, 60.0, 0.0);
+    let got = |b: &mut Vec<Bot>| -> Vec<String> {
+        pump(b, Duration::from_millis(300), |_| false);
+        let out = b[0]
+            .events
+            .iter()
+            .filter(|(n, _)| n == "rp:chat")
+            .map(|(_, a)| {
+                format!(
+                    "{}|{:?}|{:?}",
+                    text(&a[0], "kind"),
+                    field(&a[0], "from"),
+                    field(&a[0], "text")
+                )
+            })
+            .collect();
+        b[0].events.clear();
+        out
+    };
+    fn text(v: &ScriptValue, k: &str) -> String {
+        match field(v, k) {
+            ScriptValue::String(s) => s.clone(),
+            o => format!("{o:?}"),
+        }
+    }
+
+    assert_eq!(
+        ok1(call(&mut me, "rp.chat.say", &[s("  oi, tudo bem?  ")])),
+        ScriptValue::Bool(true)
+    );
+    let say = r#"say|String("Ana Souza")|String("oi, tudo bem?")"#;
+    assert_eq!(got(&mut me), [say]);
+    assert_eq!(got(&mut near), [say]);
+    assert!(got(&mut far).is_empty(), "60 m não ouve");
+
+    ok1(call(&mut me, "rp.chat.say", &[s("/me acena")]));
+    assert_eq!(
+        got(&mut near),
+        [r#"me|String("Ana Souza")|String("acena")"#]
+    );
+    ok1(call(&mut me, "rp.chat.say", &[s("/ooc volto já")]));
+    assert_eq!(
+        got(&mut far),
+        [r#"ooc|String("falante")|String("volto já")"#],
+        "OOC vai a todos"
+    );
+    assert_eq!(got(&mut near).len(), 1);
+
+    assert_eq!(
+        call(&mut me, "rp.chat.say", &[s("/grito oi")]),
+        fail("comando desconhecido: use /me ou /ooc")
+    );
+    // Mais de 5 por 5 s: recusa (flood). Espera a janela passar.
+    assert_eq!(
+        call(&mut me, "rp.chat.say", &[s("oi")]),
+        fail("limite de chamadas excedido, tente mais tarde")
+    );
+    pump(&mut me, Duration::from_millis(5100), |_| false);
+    assert_eq!(
+        call(&mut me, "rp.chat.say", &[s("/me   ")]),
+        fail("escreva algo depois de /me")
+    );
+    assert_eq!(
+        call(&mut me, "rp.chat.say", &[s(&"a".repeat(201))]),
+        fail("mensagem vazia ou com mais de 200 caracteres")
+    );
+    assert!(got(&mut near).is_empty());
+}
+
+#[test]
 fn delivery_job_pays_once_and_only_at_the_address() {
     let db = temp_db("delivery");
     let server = RunningServer::with_rp_kit(&db);
