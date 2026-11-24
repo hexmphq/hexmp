@@ -141,6 +141,32 @@ fn sandbox_blocks_dangerous_things() {
 }
 
 #[test]
+fn busy_cpu_does_not_kill_small_handlers() {
+    let f = Fixture::new();
+    f.resource(
+        "r",
+        &[],
+        "rpc.define('soma', function() local n = 0 for i = 1, 100 do n += i end return n end)
+         rpc.define('trava', function() while true do end end)",
+    );
+    // Limite 0: como se a CPU estivesse tão ocupada que nada coubesse no tempo.
+    let mut e = ScriptEngine::new(
+        &f.root,
+        EngineConfig {
+            max_call_time: Duration::ZERO,
+            ..EngineConfig::default()
+        },
+    );
+    e.start("r").unwrap();
+    e.player_joined(ana());
+    assert_eq!(e.call_rpc(1, "soma", &[]), Ok(vec![n(5050.0)]));
+    assert_eq!(
+        e.call_rpc(1, "trava", &[]),
+        Err("tempo de execução excedido".into())
+    );
+}
+
+#[test]
 fn infinite_loop_is_aborted() {
     let f = Fixture::new();
     f.resource(

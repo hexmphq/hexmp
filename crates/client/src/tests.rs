@@ -128,6 +128,26 @@ fn ui_callbacks_timers_and_stop() {
 }
 
 #[test]
+fn busy_cpu_does_not_kill_small_scripts() {
+    // Limite 0: como se a CPU estivesse tão ocupada que nada coubesse no tempo.
+    let mut rt = ClientRuntime::new(RuntimeConfig {
+        max_call_time: Duration::ZERO,
+        ..RuntimeConfig::default()
+    });
+    start(
+        &mut rt,
+        "hud",
+        "local n = 0 timer.every(10, function() for i = 1, 50 do n += i end ui.send(n) end)",
+    );
+    assert_eq!(rt.running(), ["hud"]);
+    rt.tick(Duration::from_millis(20));
+    assert_eq!(rt.drain_ui().len(), 1, "timer pequeno roda");
+    assert_eq!(rt.script_errors(), 0);
+    start(&mut rt, "mau", "while true do end");
+    assert_eq!(rt.running(), ["hud"], "laço infinito ainda é cortado");
+}
+
+#[test]
 fn sandbox_and_limits() {
     let mut rt = ClientRuntime::default();
     start(&mut rt, "mau", "while true do end");

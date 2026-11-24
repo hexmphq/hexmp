@@ -32,6 +32,12 @@ impl Default for RuntimeConfig {
     }
 }
 
+/// Checagens do Luau (chamadas e voltas de laço) antes de o limite de tempo valer. O tempo é de
+/// relógio: com a CPU ocupada (outro programa, o jogo carregando), até um script mínimo passaria
+/// do limite. Exigir que ele tenha rodado bastante código evita cortar quem não tem culpa; um laço
+/// infinito chega a isso em menos de 1 ms.
+const MIN_CHECKS: u32 = 10_000;
+
 /// Mensagem de um script para a página de UI do seu recurso (`ui.send`).
 #[derive(Debug, Clone, PartialEq)]
 pub struct UiMessage {
@@ -149,6 +155,8 @@ struct Me {
 struct Shared {
     config: RuntimeConfig,
     deadline: Cell<Instant>,
+    /// Checagens do interrupt desde o início da chamada atual.
+    checks: Cell<u32>,
     clock: Cell<Duration>,
     events: RefCell<HashMap<String, Vec<Rc<Handler>>>>,
     net: RefCell<HashMap<String, Vec<Rc<Handler>>>>,
@@ -185,6 +193,7 @@ impl Shared {
     fn arm(&self) {
         self.deadline
             .set(Instant::now() + self.config.max_call_time);
+        self.checks.set(0);
     }
 
     fn report(&self, resource: &str, what: &str, e: &mlua::Error) {
@@ -277,6 +286,7 @@ impl ClientRuntime {
             shared: Rc::new(Shared {
                 config,
                 deadline: Cell::new(Instant::now()),
+                checks: Cell::new(0),
                 clock: Cell::new(Duration::ZERO),
                 events: RefCell::default(),
                 net: RefCell::default(),
@@ -719,10 +729,16 @@ impl ClientRuntime {
             .map_err(|e| e.to_string())?;
         let weak = Rc::downgrade(s);
         lua.set_interrupt(move |_| match weak.upgrade() {
-            Some(s) if Instant::now() > s.deadline.get() => {
-                Err(mlua::Error::runtime("tempo de execução excedido"))
+            Some(s) => {
+                let n = s.checks.get().saturating_add(1);
+                s.checks.set(n);
+                if n >= MIN_CHECKS && Instant::now() > s.deadline.get() {
+                    Err(mlua::Error::runtime("tempo de execução excedido"))
+                } else {
+                    Ok(VmState::Continue)
+                }
             }
-            _ => Ok(VmState::Continue),
+            None => Ok(VmState::Continue),
         });
         let rname: Rc<str> = Rc::from(name);
         install_api(&lua, &rname, s, ui_page.is_some()).map_err(|e| error_message(&e))?;

@@ -68,6 +68,12 @@ pub enum Target {
     All,
 }
 
+/// Checagens do Luau (chamadas e voltas de laço) antes de o limite de tempo valer. O tempo é de
+/// relógio: com a CPU ocupada (outro programa, o jogo carregando), até um script mínimo passaria
+/// do limite. Exigir que ele tenha rodado bastante código evita cortar quem não tem culpa; um laço
+/// infinito chega a isso em menos de 1 ms.
+const MIN_CHECKS: u32 = 10_000;
+
 /// Pedidos dos scripts que o servidor executa depois do tick.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Command {
@@ -193,6 +199,8 @@ struct Timer {
 struct Shared {
     config: EngineConfig,
     deadline: Cell<Instant>,
+    /// Checagens do interrupt desde o início da chamada atual.
+    checks: Cell<u32>,
     clock: Cell<Duration>,
     event_depth: Cell<u32>,
     players: RefCell<BTreeMap<PlayerId, PlayerInfo>>,
@@ -404,6 +412,7 @@ impl ScriptEngine {
             shared: Rc::new(Shared {
                 config,
                 deadline: Cell::new(Instant::now()),
+                checks: Cell::new(0),
                 clock: Cell::new(Duration::ZERO),
                 event_depth: Cell::new(0),
                 players: RefCell::new(BTreeMap::new()),
@@ -568,10 +577,16 @@ impl ScriptEngine {
             .map_err(fail)?;
         let weak = Rc::downgrade(&self.shared);
         lua.set_interrupt(move |_| match weak.upgrade() {
-            Some(s) if Instant::now() > s.deadline.get() => {
-                Err(mlua::Error::runtime("tempo de execução excedido"))
+            Some(s) => {
+                let n = s.checks.get().saturating_add(1);
+                s.checks.set(n);
+                if n >= MIN_CHECKS && Instant::now() > s.deadline.get() {
+                    Err(mlua::Error::runtime("tempo de execução excedido"))
+                } else {
+                    Ok(VmState::Continue)
+                }
             }
-            _ => Ok(VmState::Continue),
+            None => Ok(VmState::Continue),
         });
         install_api(&lua, &rname, &self.shared).map_err(fail)?;
         lua.sandbox(true).map_err(fail)?;
@@ -713,6 +728,7 @@ impl ScriptEngine {
         self.shared
             .deadline
             .set(Instant::now() + self.shared.config.max_call_time);
+        self.shared.checks.set(0);
     }
 
     /// Dispara evento local para todos os recursos.
