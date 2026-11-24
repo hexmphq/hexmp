@@ -9,6 +9,8 @@ export type Player = {
     account: string,
     name: string,
     position: Vec3,
+    --- Mundo (dimensão) atual: só quem está no mesmo se vê. 0 é o mundo comum.
+    world: number,
 }
 
 -- Valores que atravessam recursos e rede: nil, boolean, number, string e tabelas destes.
@@ -72,6 +74,9 @@ declare players: {
     --- Esconde (`true`) ou mostra o jogador: escondido, os outros não o recebem nos snapshots e
     --- ele não recebe os outros. Útil em telas fora do jogo (escolha de personagem).
     hide: (id: number, hidden: boolean) -> (),
+    --- Põe o jogador em outro mundo (inteiro, 0 = comum): ele só vê e é visto por quem está no
+    --- mesmo. Para interiores, apartamentos, corridas. Confira `world` nas regras de distância.
+    setWorld: (id: number, world: number) -> (),
     --- Teleporta (sem validação de velocidade).
     setPosition: (id: number, position: Vec3) -> (),
 }

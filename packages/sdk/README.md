@@ -48,6 +48,18 @@ Regras do runtime:
 - Um recurso com erro não derruba os outros. `--hot-reload 1` reinicia recursos quando os arquivos mudam, e o cliente recebe a versão nova na hora.
 - `db` só existe com o servidor iniciado com `--db URL` (ou `HEXMP_DB`). Use tipos portáveis: TEXT, BIGINT, DOUBLE PRECISION.
 
+### Mundos separados (servidor)
+
+```lua
+-- Entrou no apartamento 12: só vê (e é visto por) quem está nele.
+players.setWorld(player.id, 1000 + 12)
+players.setPosition(player.id, interior)
+-- Saiu: volta ao mundo comum.
+players.setWorld(player.id, 0)
+```
+
+Cada jogador está num mundo (número inteiro; `0` é o comum). Os snapshots só levam quem está no mesmo mundo. O mundo não muda a posição, e as regras de distância precisam conferir `players.get(id).world` também; o `rp-inventory` já faz isso ao entregar um item.
+
 ## Cliente
 
 - O servidor envia `shared_scripts`, `client_scripts` e `files` a cada jogador quando ele entra e sempre que o recurso reinicia. O limite é 2 MB por recurso.

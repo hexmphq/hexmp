@@ -369,6 +369,9 @@ impl<T: Transport> GameServer<T> {
                         self.send(client, &ServerMessage::Correction { position });
                     }
                 }
+                Command::SetWorld { player, world } => {
+                    let _ = self.world.set_world(player, world);
+                }
                 Command::Hide { player, hidden } => {
                     let _ = self.world.set_hidden(player, hidden);
                 }
@@ -582,6 +585,7 @@ impl<T: Transport> GameServer<T> {
                 account,
                 name: name.clone(),
                 position: spawn,
+                world: 0,
             });
         }
 

@@ -216,7 +216,7 @@ rpc.define("rp.inventory.give", { rateLimit = "5/5s" }, function(player, targetI
         error("destinatário não está disponível")
     end
     local dx, dy, dz = target.position.x - me.position.x, target.position.y - me.position.y, target.position.z - me.position.z
-    if math.sqrt(dx * dx + dy * dy + dz * dz) > InventoryConfig.giveDistance then
+    if target.world ~= me.world or math.sqrt(dx * dx + dy * dy + dz * dz) > InventoryConfig.giveDistance then
         error("destinatário muito longe")
     end
     remove(player.id, item, amount)

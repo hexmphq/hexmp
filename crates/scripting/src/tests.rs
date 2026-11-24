@@ -72,6 +72,7 @@ fn ana() -> PlayerInfo {
         account: "dev:ana".into(),
         name: "ana".into(),
         position: Vec3::ZERO,
+        world: 0,
     }
 }
 
@@ -385,6 +386,7 @@ fn players_api_and_drop_event() {
         account: "dev:bia".into(),
         name: "bia".into(),
         position: Vec3::ZERO,
+        world: 0,
     });
     e.update_position(1, Vec3::new(5.0, 0.0, 0.0));
     assert_eq!(
@@ -669,6 +671,31 @@ fn multiple_roots_and_teleport() {
             position: Vec3::new(1.0, 2.0, 3.0)
         }]
     );
+}
+
+#[test]
+fn set_world_is_seen_at_once_and_validated() {
+    let f = Fixture::new();
+    f.resource(
+        "w",
+        &[],
+        "rpc.define('entrar', function(p, n) players.setWorld(p.id, n) return players.get(p.id).world end)",
+    );
+    let mut e = f.engine();
+    e.start("w").unwrap();
+    e.player_joined(ana());
+    assert_eq!(e.call_rpc(1, "entrar", &[n(5.0)]), Ok(vec![n(5.0)]));
+    assert_eq!(
+        e.drain_commands(),
+        vec![Command::SetWorld {
+            player: 1,
+            world: 5
+        }]
+    );
+    for bad in [-1.0, 1.5, 5e9] {
+        assert!(e.call_rpc(1, "entrar", &[n(bad)]).is_err(), "{bad}");
+    }
+    assert!(e.drain_commands().is_empty());
 }
 
 #[test]

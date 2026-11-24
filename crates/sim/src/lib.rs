@@ -27,6 +27,8 @@ pub struct Player {
     pub frozen: bool,
     /// Fora do mundo dos outros: ninguém o vê e ele não vê ninguém.
     pub hidden: bool,
+    /// Mundo (dimensão): só quem está no mesmo se vê.
+    pub world: u32,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -70,6 +72,7 @@ impl World {
             rejected_moves: 0,
             frozen: false,
             hidden: false,
+            world: 0,
         };
         self.players.entry(id).or_insert(player)
     }
@@ -139,6 +142,15 @@ impl World {
         Ok(())
     }
 
+    /// Muda o mundo (dimensão) do jogador.
+    pub fn set_world(&mut self, id: PlayerId, world: u32) -> Result<(), MoveError> {
+        self.players
+            .get_mut(&id)
+            .ok_or(MoveError::UnknownPlayer)?
+            .world = world;
+        Ok(())
+    }
+
     /// Esconde (ou mostra) o jogador dos outros, e os outros dele.
     pub fn set_hidden(&mut self, id: PlayerId, hidden: bool) -> Result<(), MoveError> {
         self.players
@@ -151,10 +163,12 @@ impl World {
     /// Jogadores dentro do raio. Linear por enquanto; grade espacial depois.
     /// `viewer` sempre se vê; escondidos só veem a si mesmos e só são vistos por si.
     pub fn visible_from(&self, viewer: PlayerId, center: Vec3, radius: f32) -> Vec<EntityState> {
-        let alone = self.players.get(&viewer).is_some_and(|p| p.hidden);
+        let Some(me) = self.players.get(&viewer) else {
+            return Vec::new();
+        };
         self.players
             .values()
-            .filter(|p| p.id == viewer || (!alone && !p.hidden))
+            .filter(|p| p.id == viewer || (!me.hidden && !p.hidden && p.world == me.world))
             .filter(|p| p.position.distance(center) <= radius)
             .map(|p| EntityState {
                 id: p.id,
@@ -287,6 +301,13 @@ mod tests {
         w.set_hidden(other, false).unwrap();
         assert_eq!(ids(&w, other), vec![near, other]);
         assert!(w.set_hidden(999, true).is_err());
+        // Mundos: só quem está no mesmo se vê.
+        w.set_world(other, 7).unwrap();
+        assert_eq!(ids(&w, near), vec![near]);
+        assert_eq!(ids(&w, other), vec![other]);
+        w.set_world(near, 7).unwrap();
+        assert_eq!(ids(&w, near), vec![near, other]);
+        assert!(w.set_world(999, 1).is_err());
     }
 
     #[test]

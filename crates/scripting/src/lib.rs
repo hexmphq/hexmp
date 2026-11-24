@@ -47,6 +47,8 @@ pub struct PlayerInfo {
     pub account: String,
     pub name: String,
     pub position: Vec3,
+    /// Mundo (dimensão): só quem está no mesmo se vê. 0 é o mundo comum.
+    pub world: u32,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -76,6 +78,11 @@ pub enum Command {
     Freeze {
         player: PlayerId,
         frozen: bool,
+    },
+    /// Põe o jogador em outro mundo (dimensão).
+    SetWorld {
+        player: PlayerId,
+        world: u32,
     },
     /// Esconde (ou mostra) o jogador dos outros.
     Hide {
@@ -927,6 +934,7 @@ fn player_value(p: &PlayerInfo) -> ScriptValue {
                 ("z".into(), ScriptValue::Number(p.position.z as f64)),
             ]),
         ),
+        ("world".into(), ScriptValue::Number(p.world as f64)),
     ])
 }
 
@@ -1194,6 +1202,27 @@ fn install_api(lua: &Lua, resource: &Rc<str>, shared: &Rc<Shared>) -> mlua::Resu
                 .outbox
                 .borrow_mut()
                 .push(Command::Freeze { player: id, frozen });
+            Ok(())
+        })?,
+    )?;
+    let w = Rc::downgrade(shared);
+    players.set(
+        "setWorld",
+        lua.create_function(move |_, (id, world): (PlayerId, f64)| {
+            if world.fract() != 0.0 || !(0.0..=u32::MAX as f64).contains(&world) {
+                return Err(mlua::Error::runtime(
+                    "players.setWorld: mundo deve ser inteiro de 0 a 4294967295",
+                ));
+            }
+            let world = world as u32;
+            let s = upgrade(&w)?;
+            // Já vale para quem ler players.get neste mesmo tick.
+            if let Some(p) = s.players.borrow_mut().get_mut(&id) {
+                p.world = world;
+            }
+            s.outbox
+                .borrow_mut()
+                .push(Command::SetWorld { player: id, world });
             Ok(())
         })?,
     )?;
