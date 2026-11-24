@@ -29,6 +29,15 @@ pub struct Player {
     pub hidden: bool,
     /// Mundo (dimensão): só quem está no mesmo se vê.
     pub world: u32,
+    /// Nome que os outros veem no lugar de `name` (ex.: o do personagem).
+    pub display_name: Option<String>,
+}
+
+impl Player {
+    /// O nome que os outros veem.
+    pub fn shown_name(&self) -> &str {
+        self.display_name.as_deref().unwrap_or(&self.name)
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -73,6 +82,7 @@ impl World {
             frozen: false,
             hidden: false,
             world: 0,
+            display_name: None,
         };
         self.players.entry(id).or_insert(player)
     }
@@ -139,6 +149,19 @@ impl World {
         p.frozen = frozen;
         // Ao soltar, o tempo parado não vira crédito de velocidade.
         p.last_move_tick = self.tick;
+        Ok(())
+    }
+
+    /// Troca o nome que os outros veem; `None` volta ao da conta.
+    pub fn set_display_name(
+        &mut self,
+        id: PlayerId,
+        name: Option<String>,
+    ) -> Result<(), MoveError> {
+        self.players
+            .get_mut(&id)
+            .ok_or(MoveError::UnknownPlayer)?
+            .display_name = name;
         Ok(())
     }
 

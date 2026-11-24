@@ -369,6 +369,21 @@ impl<T: Transport> GameServer<T> {
                         self.send(client, &ServerMessage::Correction { position });
                     }
                 }
+                Command::SetDisplayName { player, name } => {
+                    if self.world.set_display_name(player, name).is_ok()
+                        && let Some(p) = self.world.player(player)
+                    {
+                        // Os outros trocam o nome; repetir PlayerJoined só atualiza.
+                        let msg = ServerMessage::PlayerJoined {
+                            id: player,
+                            name: p.shown_name().to_string(),
+                        };
+                        match self.client_of(player) {
+                            Some(c) => self.broadcast_except(c, &msg),
+                            None => self.broadcast(&msg),
+                        }
+                    }
+                }
                 Command::SetWorld { player, world } => {
                     let _ = self.world.set_world(player, world);
                 }
@@ -617,7 +632,7 @@ impl<T: Transport> GameServer<T> {
             .filter(|p| p.id != id)
             .map(|p| ServerMessage::PlayerJoined {
                 id: p.id,
-                name: p.name.clone(),
+                name: p.shown_name().to_string(),
             })
             .collect();
         for msg in &others {

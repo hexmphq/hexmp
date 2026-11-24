@@ -103,6 +103,7 @@ local function finishLoading(playerId: number)
     players.setPosition(playerId, l.char.position)
     players.freeze(playerId, false)
     players.hide(playerId, false)
+    players.setDisplayName(playerId, `{l.char.firstName} {l.char.lastName}`)
     events.emit("rp:characterLoaded", playerId, l.char)
     net.emit(playerId, "rp:characterLoaded", summary(l.char))
     l.reply.ok(summary(l.char))
@@ -120,6 +121,7 @@ local function unload(playerId: number)
     active[playerId] = nil
     players.freeze(playerId, true)
     players.hide(playerId, true)
+    players.setDisplayName(playerId, nil)
     net.emit(playerId, "rp:characterUnloaded")
 end
 
@@ -312,6 +314,7 @@ events.on("resourceStop", function(name)
         for _, p in players.list() do
             players.freeze(p.id, false)
             players.hide(p.id, false)
+            players.setDisplayName(p.id, nil)
         end
     else
         -- Módulo parou: não esperar mais por ele.

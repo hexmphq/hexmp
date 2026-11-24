@@ -79,6 +79,11 @@ pub enum Command {
         player: PlayerId,
         frozen: bool,
     },
+    /// Nome que os outros jogadores veem; `None` volta ao da conta.
+    SetDisplayName {
+        player: PlayerId,
+        name: Option<String>,
+    },
     /// Põe o jogador em outro mundo (dimensão).
     SetWorld {
         player: PlayerId,
@@ -1202,6 +1207,25 @@ fn install_api(lua: &Lua, resource: &Rc<str>, shared: &Rc<Shared>) -> mlua::Resu
                 .outbox
                 .borrow_mut()
                 .push(Command::Freeze { player: id, frozen });
+            Ok(())
+        })?,
+    )?;
+    let w = Rc::downgrade(shared);
+    players.set(
+        "setDisplayName",
+        lua.create_function(move |_, (id, name): (PlayerId, Option<String>)| {
+            if let Some(n) = &name {
+                let len = n.chars().count();
+                if n.trim().is_empty() || len > 32 || n.chars().any(char::is_control) {
+                    return Err(mlua::Error::runtime(
+                        "players.setDisplayName: nome de 1 a 32 caracteres, sem controle",
+                    ));
+                }
+            }
+            upgrade(&w)?
+                .outbox
+                .borrow_mut()
+                .push(Command::SetDisplayName { player: id, name });
             Ok(())
         })?,
     )?;

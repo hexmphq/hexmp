@@ -77,6 +77,9 @@ declare players: {
     --- Põe o jogador em outro mundo (inteiro, 0 = comum): ele só vê e é visto por quem está no
     --- mesmo. Para interiores, apartamentos, corridas. Confira `world` nas regras de distância.
     setWorld: (id: number, world: number) -> (),
+    --- Nome que os OUTROS jogadores veem (1 a 32 caracteres), ex.: o do personagem. `nil` volta
+    --- ao nome da conta. `players.get(id).name` continua sendo o da conta.
+    setDisplayName: (id: number, name: string?) -> (),
     --- Teleporta (sem validação de velocidade).
     setPosition: (id: number, position: Vec3) -> (),
 }

@@ -699,6 +699,44 @@ fn set_world_is_seen_at_once_and_validated() {
 }
 
 #[test]
+fn display_name_is_validated() {
+    let f = Fixture::new();
+    f.resource(
+        "n",
+        &[],
+        "rpc.define('nome', function(p, n) players.setDisplayName(p.id, n) end)",
+    );
+    let mut e = f.engine();
+    e.start("n").unwrap();
+    e.player_joined(ana());
+    e.call_rpc(1, "nome", &[s("Ana Souza")]).unwrap();
+    e.call_rpc(1, "nome", &[]).unwrap();
+    assert_eq!(
+        e.drain_commands(),
+        vec![
+            Command::SetDisplayName {
+                player: 1,
+                name: Some("Ana Souza".into())
+            },
+            Command::SetDisplayName {
+                player: 1,
+                name: None
+            },
+        ]
+    );
+    for bad in [
+        "",
+        "   ",
+        "a
+b",
+        &"x".repeat(33),
+    ] {
+        assert!(e.call_rpc(1, "nome", &[s(bad)]).is_err(), "{bad:?}");
+    }
+    assert!(e.drain_commands().is_empty());
+}
+
+#[test]
 fn deferred_rpc_replies_later_once() {
     let f = Fixture::new();
     f.resource(

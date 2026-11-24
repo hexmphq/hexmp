@@ -466,10 +466,19 @@ fn shop_over_the_network_with_rp_kit() {
     pump(&mut bots, Duration::from_millis(300), |_| false);
     assert_eq!(bots[0].stats.visible_entities, 1);
     assert_eq!(other[0].stats.visible_entities, 1);
+    let other_id = other[0].player_id.unwrap();
+    assert_eq!(
+        bots[0].names[&other_id], "outro",
+        "sem personagem: nome da conta"
+    );
     new_character(&mut other);
     pump(&mut other, Duration::from_millis(300), |_| false);
     pump(&mut bots, Duration::from_millis(300), |_| false);
     assert_eq!(bots[0].stats.visible_entities, 2, "com personagem, aparece");
+    assert_eq!(
+        bots[0].names[&other_id], "Ana Souza",
+        "e com o nome do personagem"
+    );
     drop_bot(other.pop().unwrap());
     // O personagem nasce longe da loja.
     walk_to(&mut bots, 12.0, 6.0);

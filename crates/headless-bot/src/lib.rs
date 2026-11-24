@@ -43,6 +43,8 @@ pub struct Bot {
     pub rejected: Option<String>,
     /// Outros jogadores que o servidor anunciou.
     pub known_players: HashSet<PlayerId>,
+    /// Nome que o servidor mostra de cada um (o do personagem, se houver).
+    pub names: HashMap<PlayerId, String>,
     pub position: Vec3,
     pub stats: BotStats,
     /// Respostas de RPC por id.
@@ -123,6 +125,7 @@ impl Bot {
             player_id: None,
             rejected: None,
             known_players: HashSet::new(),
+            names: HashMap::new(),
             position: Vec3::ZERO,
             stats: BotStats::default(),
             rpc_results: HashMap::new(),
@@ -228,11 +231,13 @@ impl Bot {
                 self.position = spawn;
             }
             ServerMessage::Reject { reason } => self.rejected = Some(reason),
-            ServerMessage::PlayerJoined { id, .. } => {
+            ServerMessage::PlayerJoined { id, name } => {
                 self.known_players.insert(id);
+                self.names.insert(id, name);
             }
             ServerMessage::PlayerLeft { id } => {
                 self.known_players.remove(&id);
+                self.names.remove(&id);
             }
             ServerMessage::Snapshot { tick, entities } => {
                 // Unreliable pode chegar fora de ordem.
