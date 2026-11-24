@@ -8,7 +8,7 @@ Recursos base de roleplay, em Luau, licença MIT OR Apache-2.0. Use como estão 
 | `rp-money` | Dinheiro em mão (`cash`) e no banco (`bank`), transferências e extrato. |
 | `rp-inventory` | Inventário por personagem com peso máximo, uso e entrega de itens. |
 | `rp-characters` | Tela de criar e escolher personagem (F5 troca). |
-| `rp-hud` | Dinheiro, inventário (I), avisos, dicas e pontos de interesse na tela. |
+| `rp-hud` | Dinheiro, inventário (I), avisos, dicas, pontos de interesse e quem está por perto (até 20 m) na tela. |
 
 Os três primeiros são só servidor. As telas são recursos à parte: troque por outra sem mexer nas regras.
 

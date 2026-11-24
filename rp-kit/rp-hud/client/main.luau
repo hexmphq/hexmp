@@ -3,6 +3,7 @@
 --   "hud:notify"(texto, "ok" | "erro"?)          aviso que some sozinho
 --   "hud:prompt"(recurso, texto | nil)           dica na parte de baixo ("E: abrir a loja")
 --   "hud:point"(id, { label, position } | nil)   ponto com direção e distância
+-- Sozinho, mostra quem está a até 20 m ("Por perto"), só com personagem.
 -- O HUD emite "hud:ready" quando (re)inicia: mande de novo o que estiver valendo.
 
 local playing = false
@@ -12,6 +13,9 @@ local bag: any = nil
 local prompts: { [string]: string } = {}
 local points: { [string]: any } = {}
 local drawn = "" -- últimos pontos mandados à página
+local nearDrawn = "" -- última lista de quem está perto
+local NEAR = 20 -- metros: quem aparece em "Por perto"
+local GIVE = 3 -- metros: o mesmo limite do rp-inventory (giveDistance), que confere de novo
 
 local function state()
     ui.send({ type = "state", playing = playing, money = money, bag = bag })
@@ -52,10 +56,27 @@ local function showPoints()
     end
 end
 
+local function showNear()
+    local list = {}
+    local key = ""
+    if playing then
+        for _, p in players.nearby(NEAR) do
+            local d = math.floor(p.distance + 0.5)
+            table.insert(list, { name = p.name, distance = d })
+            key ..= `{p.id}|{p.name}|{d};`
+        end
+    end
+    if key ~= nearDrawn then
+        nearDrawn = key
+        ui.send({ type = "near", players = list })
+    end
+end
+
 local function setOpen(on: boolean)
     open = on
     ui.focus(on)
-    ui.send({ type = "inventory", open = on, players = players.list(), me = me.id() })
+    -- Só dá para entregar a quem está ao lado.
+    ui.send({ type = "inventory", open = on, players = players.nearby(GIVE), me = me.id() })
 end
 
 local function load()
@@ -143,6 +164,7 @@ timer.every(100, function()
         showPoints()
     end
 end)
+timer.every(250, showNear)
 
 keys.bind("inventory", "I", "Abrir o inventário", function(down)
     if down and playing then
@@ -155,6 +177,8 @@ ui.on("ready", function()
     showPrompts()
     drawn = ""
     showPoints()
+    nearDrawn = ""
+    showNear()
 end)
 ui.on("close", function()
     setOpen(false)

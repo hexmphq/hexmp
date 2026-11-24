@@ -21,7 +21,14 @@ button.main { background: var(--cyan); border-color: var(--cyan); color: #050b1c
 #money b { font-weight: 600; font-variant-numeric: tabular-nums; }
 #diff { position: absolute; right: 100%; margin-right: 26px; font-style: normal; font-weight: 600; white-space: nowrap; text-shadow: 0 1px 3px #000; }
 .up { color: var(--green); } .down { color: var(--coral); }
-#points { position: fixed; top: 98px; right: 24px; width: 260px; margin: 0; padding: 10px 14px; list-style: none; background: var(--night); border-radius: 10px; }
+#side { position: fixed; top: 98px; right: 24px; width: 260px; display: flex; flex-direction: column; gap: 8px; }
+#near { padding: 10px 14px; background: var(--night); border-radius: 10px; }
+#near h2 { margin: 0 0 4px; font-size: 12px; font-weight: 600; letter-spacing: .06em; text-transform: uppercase; color: var(--muted); }
+#near ul { margin: 0; padding: 0; list-style: none; }
+#near li { display: flex; gap: 8px; }
+#near li span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#near em { margin-left: auto; white-space: nowrap; font-style: normal; color: var(--muted); font-variant-numeric: tabular-nums; }
+#points { margin: 0; padding: 10px 14px; list-style: none; background: var(--night); border-radius: 10px; }
 #points:empty { display: none; }
 #points li { display: flex; gap: 8px; }
 #points svg { width: 14px; height: 14px; margin-top: 4px; flex: none; }

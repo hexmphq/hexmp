@@ -72,6 +72,17 @@ function drawPoints(points) {
   }
 }
 
+function drawNear(players) {
+  const ul = $("near").querySelector("ul");
+  ul.replaceChildren();
+  for (const p of list(players)) {
+    const li = el("li");
+    li.append(el("span", p.name), el("em", `${p.distance} m`));
+    ul.append(li);
+  }
+  $("near").hidden = !ul.children.length;
+}
+
 window.addEventListener("message", (e) => {
   const m = e.data || {};
   if (m.type === "state") {
@@ -91,6 +102,7 @@ window.addEventListener("message", (e) => {
     $("prompt").textContent = m.text;
     $("prompt").hidden = !m.text;
   } else if (m.type === "points") drawPoints(m.points);
+  else if (m.type === "near") drawNear(m.players);
   else if (m.type === "notify") notify(m.text, m.kind);
   else if (m.type === "inventory") {
     others = list(m.players).filter((p) => p.id !== m.me);
