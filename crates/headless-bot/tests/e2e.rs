@@ -431,7 +431,7 @@ fn chat_reaches_only_who_is_near() {
 
     assert_eq!(
         call(&mut me, "rp.chat.say", &[s("/grito oi")]),
-        fail("comando desconhecido: use /me ou /ooc")
+        fail("comando desconhecido: use /me, /ooc ou /ajuda")
     );
     // Mais de 5 por 5 s: recusa (flood). Espera a janela passar.
     assert_eq!(
