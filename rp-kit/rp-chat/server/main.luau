@@ -17,6 +17,23 @@ local function clean(text: any): string?
     return t
 end
 
+-- Comandos de outros recursos: /nome → recurso que responde em exports "chatCommand".
+local commands: { [string]: string } = {}
+
+exports.define("registerCommand", function(name: string, resource: string)
+    assert(type(name) == "string" and string.match(name, "^%l[%l%d]*$"), "nome de comando inválido")
+    assert(name ~= "me" and name ~= "ooc", "comando reservado")
+    commands[name] = resource
+end)
+
+events.on("resourceStop", function(resource)
+    for name, owner in commands do
+        if owner == resource then
+            commands[name] = nil
+        end
+    end
+end)
+
 local function near(a: any, b: any): boolean
     local dx, dy, dz = a.x - b.x, a.y - b.y, a.z - b.z
     return dx * dx + dy * dy + dz * dz <= RANGE * RANGE
@@ -34,12 +51,21 @@ rpc.define("rp.chat.say", { rateLimit = "5/5s" }, function(player, raw)
     local kind = "say"
     if string.sub(text, 1, 1) == "/" then
         local cmd, rest = string.match(text, "^/(%S+)%s*(.*)$")
+        local owner = cmd and commands[string.lower(cmd)]
+        if owner then
+            -- O dono confere permissão e argumentos; a resposta só vai a quem pediu.
+            local reply = exports.call(owner, "chatCommand", player.id, string.lower(cmd), rest or "")
+            if type(reply) == "string" and reply ~= "" then
+                net.emit(player.id, "rp:chat", { kind = "info", text = reply })
+            end
+            return true
+        end
         if cmd == "me" then
             kind = "me"
         elseif cmd == "ooc" then
             kind = "ooc"
         else
-            error("comando desconhecido: use /me ou /ooc")
+            error("comando desconhecido: use /me, /ooc ou /ajuda")
         end
         text = clean(rest)
         if text == nil then

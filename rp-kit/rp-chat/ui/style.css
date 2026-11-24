@@ -20,6 +20,7 @@ body { font: 15px/1.4 "Segoe UI", system-ui, sans-serif; color: var(--text); }
 #log .ooc b { color: var(--muted); }
 #log .ooc b::before { content: "(OOC) "; }
 #log .erro { color: var(--coral); }
+#log .info { color: var(--muted); white-space: pre-line; }
 #text {
   width: 100%; font: inherit; color: var(--text); background: var(--night);
   border: 1px solid var(--line); border-radius: 8px; padding: 9px 12px; outline: none;

@@ -101,6 +101,17 @@ ssh -L 30122:127.0.0.1:30122 usuario@servidor
 
 Quem tem a chave do painel manda no servidor. Para trocá-la, pare o servidor, apague o `admin.key` e suba de novo.
 
+Dentro do jogo, os admins usam comandos no chat (T, depois `/ajuda`). Quem é admin fica em `rp-kit/rp-admin/server/config.luau`, pela **conta** do jogador (o painel mostra a conta de cada um):
+
+```lua
+AdminGroups = {
+    ["hexmp:01J..."] = "owner", -- tudo
+    ["hexmp:01K..."] = "mod",   -- /ir, /trazer, /kick, /jogadores
+}
+```
+
+O exemplo vem com `"dev:admin"`, que só existe no modo `insecure`; troque pelas contas reais. Cada comando de admin usado vai para o log.
+
 Banir exige modo seguro e banco (sem `db`, nenhum ban é conferido). Também dá pelo terminal, até com o jogador fora:
 
 ```sh

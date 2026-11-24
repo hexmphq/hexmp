@@ -9,6 +9,7 @@ Recursos base de roleplay, em Luau, licença MIT OR Apache-2.0. Use como estão 
 | `rp-inventory` | Inventário por personagem com peso máximo, uso e entrega de itens. |
 | `rp-characters` | Tela de criar e escolher personagem (F5 troca). |
 | `rp-chat` | Chat (T): fala para quem está a até 20 m no mesmo mundo, `/me` (ação) e `/ooc` (todos, nome da conta). Até 200 caracteres, 5 mensagens a cada 5 s. |
+| `rp-admin` | Grupos por conta (`mod`, `admin`, `owner`) em `server/config.luau` e comandos no chat: `/ajuda`, `/jogadores`, `/ir`, `/trazer`, `/kick` (mod); `/dinheiro`, `/carro`, `/dv` (admin). Cada uso vai para o log. Outros recursos registram comandos com `exports.call("rp-chat", "registerCommand", nome, RESOURCE_NAME)` e respondem em `exports.define("chatCommand", ...)`. |
 | `rp-hud` | Dinheiro, inventário (I), avisos, dicas, pontos de interesse e quem está por perto (até 20 m) na tela. |
 
 Os três primeiros são só servidor. As telas são recursos à parte: troque por outra sem mexer nas regras.

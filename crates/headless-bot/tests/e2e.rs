@@ -495,7 +495,10 @@ fn driving_a_car_moves_it() {
     );
 
     // Sai: desce à esquerda (oeste, olhando para o norte) e o carro fica.
-    assert_eq!(call(&mut bots, "cars.toggle", &[]), Ok(vec![ScriptValue::Nil]));
+    assert_eq!(
+        call(&mut bots, "cars.toggle", &[]),
+        Ok(vec![ScriptValue::Nil])
+    );
     pump(&mut bots, Duration::from_millis(300), |_| false);
     assert!(
         bots[0].position.distance(Vec3::new(4.0, 20.0, 0.0)) < 0.01,
@@ -505,6 +508,105 @@ fn driving_a_car_moves_it() {
     walk_to(&mut bots, 0.0, 20.0);
     let v = bots[0].vehicles.iter().find(|v| v.id == car).unwrap();
     assert_eq!((v.position, v.driver), (Vec3::new(6.0, 20.0, 0.0), None));
+}
+
+#[test]
+fn admin_commands_need_the_group() {
+    let db = temp_db("admin");
+    let repo = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+    // Sem chave: contas "dev:nome", e o config.luau de exemplo faz "dev:admin" dono.
+    let server = RunningServer::start_with(
+        vec![repo.join("rp-kit"), repo.join("resources")],
+        Some(db),
+        None,
+        None,
+    );
+    let mut boss = join(&server, "admin", 4500);
+    let mut joe = join(&server, "comum", 4501);
+    new_character(&mut boss);
+    new_character(&mut joe);
+    let joe_id = joe[0].player_id.unwrap();
+    let say = |b: &mut Vec<Bot>, text: &str| -> Result<String, String> {
+        b[0].events.clear();
+        call(b, "rp.chat.say", &[s(text)])?;
+        pump(b, Duration::from_millis(300), |_| false);
+        let info = b[0]
+            .events
+            .iter()
+            .filter(|(n, _)| n == "rp:chat")
+            .find(|(_, a)| field(&a[0], "kind") == &s("info"));
+        Ok(match info.map(|(_, a)| field(&a[0], "text")) {
+            Some(ScriptValue::String(t)) => t.clone(),
+            o => format!("{o:?}"),
+        })
+    };
+
+    let help = say(&mut joe, "/ajuda").unwrap();
+    assert!(help.contains("/me") && !help.contains("/kick"), "{help}");
+    assert!(
+        say(&mut joe, "/kick 1")
+            .unwrap_err()
+            .contains("sem permissão")
+    );
+    assert!(
+        say(&mut joe, "/voar")
+            .unwrap_err()
+            .contains("comando desconhecido")
+    );
+
+    let help = say(&mut boss, "/ajuda").unwrap();
+    assert!(help.contains("/kick") && help.contains("/carro"), "{help}");
+    let who = say(&mut boss, "/jogadores").unwrap();
+    assert!(
+        who.contains(&format!("{joe_id} comum (Ana Souza)")),
+        "{who}"
+    );
+    assert!(
+        say(&mut boss, "/dinheiro 999 10")
+            .unwrap_err()
+            .contains("jogador não encontrado")
+    );
+    assert!(
+        say(&mut boss, &format!("/dinheiro {joe_id} 0"))
+            .unwrap_err()
+            .contains("quantia")
+    );
+    say(&mut boss, &format!("/dinheiro {joe_id} 100")).unwrap();
+    let money = ok1(call(&mut joe, "rp.money.get", &[]));
+    assert_eq!(field(&money, "cash"), &n(600.0));
+
+    // Limite do chat (5 por 5 s). Os dois continuam conectados enquanto isso.
+    let wait = |boss: &mut Vec<Bot>, joe: &mut Vec<Bot>| {
+        for _ in 0..26 {
+            pump(boss, Duration::from_millis(100), |_| false);
+            pump(joe, Duration::from_millis(100), |_| false);
+        }
+    };
+    wait(&mut boss, &mut joe);
+    walk_to(&mut boss, 30.0, 30.0);
+    say(&mut boss, &format!("/trazer {joe_id}")).unwrap();
+    pump(&mut joe, Duration::from_millis(300), |_| false);
+    assert!(
+        joe[0].position.distance(Vec3::new(31.0, 30.0, 0.0)) < 0.01,
+        "{:?}",
+        joe[0].position
+    );
+
+    let cars = boss[0].vehicles.len();
+    say(&mut boss, "/carro van").unwrap();
+    pump(&mut boss, Duration::from_millis(300), |_| false);
+    assert_eq!(boss[0].vehicles.len(), cars + 1);
+    say(&mut boss, "/dv").unwrap();
+    wait(&mut boss, &mut joe);
+    assert_eq!(boss[0].vehicles.len(), cars);
+    assert!(
+        say(&mut boss, "/dv")
+            .unwrap_err()
+            .contains("nenhum carro de admin")
+    );
+
+    say(&mut boss, &format!("/kick {joe_id} teste")).unwrap();
+    assert!(pump(&mut joe, Duration::from_secs(5), |b| b[0].is_disconnected()));
 }
 
 #[test]
