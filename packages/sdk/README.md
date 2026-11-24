@@ -58,7 +58,7 @@ players.setPosition(player.id, interior)
 players.setWorld(player.id, 0)
 ```
 
-Cada jogador está num mundo (número inteiro; `0` é o comum). Os snapshots só levam quem está no mesmo mundo. O mundo não muda a posição, e as regras de distância precisam conferir `players.get(id).world` também; o `rp-inventory` já faz isso ao entregar um item.
+Cada jogador está num mundo (número inteiro; `0` é o comum). Os snapshots só levam quem está no mesmo mundo. O mundo não muda a posição, e as regras de distância precisam conferir `players.get(id).world` também; o `rp-inventory` já faz isso ao entregar um item. Exemplo completo: [`resources/apartment`](../../resources/apartment).
 
 ## Cliente
 
@@ -135,4 +135,4 @@ hexmp-client --server 127.0.0.1:30120 --name Fulano --ui-dir ./ui-recebida
 
 Esse cliente roda os scripts de cliente de verdade e mostra no terminal tudo o que iria para a UI (`[ui recurso] {...}`). Ele também grava as páginas recebidas, para você abrir no navegador. Com servidor em modo seguro, use `--token` com o token devolvido pelo login.
 
-Exemplos: [`rp-kit`](../../rp-kit), [`resources/shop`](../../resources/shop), [`resources/delivery`](../../resources/delivery) e [`resources/hud`](../../resources/hud) (cliente + UI).
+Exemplos: [`rp-kit`](../../rp-kit), [`resources/shop`](../../resources/shop), [`resources/delivery`](../../resources/delivery), [`resources/apartment`](../../resources/apartment) (mundos separados) e [`resources/hud`](../../resources/hud) (cliente + UI).

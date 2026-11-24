@@ -310,6 +310,63 @@ fn event<'a>(bot: &'a Bot, name: &str) -> Option<&'a [ScriptValue]> {
 }
 
 #[test]
+fn apartment_is_a_world_of_its_own() {
+    let db = temp_db("apartment");
+    let server = RunningServer::with_rp_kit(&db);
+    let mut bots = join(&server, "morador", 4200);
+    let mut street = join(&server, "vizinho", 4201);
+    let fail = |e: &str| Err(e.to_string());
+    let see = |bots: &mut [Bot], street: &mut [Bot]| {
+        pump(street, Duration::from_millis(300), |_| false);
+        pump(bots, Duration::from_millis(300), |_| false);
+        (
+            bots[0].stats.visible_entities,
+            street[0].stats.visible_entities,
+        )
+    };
+
+    assert_eq!(
+        call(&mut bots, "apartment.enter", &[]),
+        fail("selecione um personagem")
+    );
+    new_character(&mut bots);
+    new_character(&mut street);
+    assert_eq!(
+        call(&mut bots, "apartment.enter", &[]),
+        fail("você está longe da porta")
+    );
+    walk_to(&mut bots, -20.0, -10.0);
+    assert_eq!(see(&mut bots, &mut street), (2, 2));
+
+    assert_eq!(
+        ok1(call(&mut bots, "apartment.enter", &[])),
+        ScriptValue::Bool(true)
+    );
+    assert_eq!(
+        see(&mut bots, &mut street),
+        (1, 1),
+        "dentro, um não vê o outro"
+    );
+    assert!(bots[0].position.distance(Vec3::new(-300.0, 300.0, 0.0)) < 1.0);
+    assert_eq!(
+        call(&mut bots, "apartment.enter", &[]),
+        fail("você já está dentro")
+    );
+    // Da rua, o vizinho não consegue sair de um apartamento em que não está.
+    assert_eq!(
+        call(&mut street, "apartment.exit", &[]),
+        fail("você não está no apartamento")
+    );
+    walk_to(&mut bots, -300.0, 304.0);
+    assert_eq!(
+        ok1(call(&mut bots, "apartment.exit", &[])),
+        ScriptValue::Bool(true)
+    );
+    assert_eq!(see(&mut bots, &mut street), (2, 2), "de volta à rua");
+    assert!(bots[0].position.distance(Vec3::new(-20.0, -10.0, 0.0)) < 1.0);
+}
+
+#[test]
 fn delivery_job_pays_once_and_only_at_the_address() {
     let db = temp_db("delivery");
     let server = RunningServer::with_rp_kit(&db);

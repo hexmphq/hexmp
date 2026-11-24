@@ -20,7 +20,7 @@ packages/
   ui-kit        componentes de UI
   panel         painel web (Svelte)
 rp-kit/         framework de RP opcional (Luau)
-resources/      recursos de exemplo (shop, delivery, hud)
+resources/      recursos de exemplo (shop, delivery, apartment, hud)
 docs/           documentação e decisões técnicas
 ```
 
